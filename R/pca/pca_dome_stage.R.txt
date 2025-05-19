@@ -415,6 +415,7 @@ for (sample in c('k4me1', 'k4me2', 'k4me3', 'k9ac', 'k27ac', 'h4k16ac', 'k56ac',
 	data4[,enrich_name] <- data4[,center_down_name] - data4[,igg_name]
 }
 
+data4[,10:ncol(data4)] <- round(data4[,10:ncol(data4)], 3)
 write.table(data4, 'output/atac_open_predictions.txt', row.names=F, quote=F, sep='\t')
 #####data4 <- read.table('output/atac_open_predictions.txt', header=T, sep='\t')
 
@@ -625,7 +626,6 @@ table(data5[,c('enh_status', 'enh_cat')])
 
 
 data5 <- data5[order(data5$enh_cat, -data5$dome_k4me2_lg_enrich), ]
-
 ## Write out the full table
 write.table(data5, 'output/all_distal_enh.txt', row.names=F, quote=F, sep='\t')
 
