@@ -1,0 +1,301 @@
+### Hurton et al, PLoS Biology 2025
+###
+### RNA-seq kinetics for NPS-affected and unaffected genes
+###
+### File dependencies:
+###		../../public_data/miao22_all_zygotic_gene_category.csv
+###		../../public_data/heyn14_minorwave.csv
+### ../../public_data/dev_timecourse_zebrafish_vejnar_giraldez_rpkm_1_gene_all_all_v12.csv.gz
+###		../../public_data/heyn_GSE47709_comb_genes_2.tsv
+###		../../public_data/White_zebrafish_timecourse.tsv
+###		../../public_data/bhat23_zf_slam_seq.txt
+
+
+## Read in Miao 2022 annotations
+
+miao <- read.csv('../../public_data/miao22_all_zygotic_gene_category.csv')
+names(miao) <- c('Geneid', 'Symbol', 'WT_4h_Click.iT', 'MZnps_4h_Click.iT', 'Miao_MZnps_category')
+miao$Miao_MZnps_category <- gsub(' ', '_', miao$Miao_MZnps_category)
+
+## For reference, join with Heyn 2014 minor wave classifications
+# Minor wave = genes 4-fold up in 512c vs 128c using 1+FPKM
+# Many of the Ensembl IDs have been retired
+
+heyn <- read.csv('../../public_data/heyn14_minorwave.csv')
+miao$Heyn_4su_minorwave <- ifelse(miao$Geneid %in% heyn[,1], 'Minor_wave', '.')
+
+
+## Plotting function for expression trajectory line plot
+
+plot_kinetics = function(mat, group_name, fg_col='#005AB5', bg_col='#005AB544') {
+	n <- nrow(mat[mat$contrast %in% group_name,])
+	nps_down_mean <- apply(log2(mat[mat$contrast %in% group_name, 3:ncol(mat)]), 2, mean)
+	nps_down_sd <- apply(log2(mat[mat$contrast %in% group_name, 3:ncol(mat)]), 2, sd)
+	nps_down_margin <- qt(0.975, df=n-1) * nps_down_sd / sqrt(n)
+
+	points(nps_down_mean, type='l', col=fg_col, lwd=1)
+	polygon(c(1:length(nps_down_mean), length(nps_down_mean):1), c(nps_down_mean-nps_down_margin, rev(nps_down_mean+nps_down_margin)), col=bg_col, border=F)
+	
+	summary_table <- cbind(nps_down_mean, nps_down_mean-nps_down_margin, nps_down_mean+nps_down_margin)
+	summary_table
+}
+
+
+
+## Data set 1: Vejnar timecourse ribo-zero, yeast spikein normalized, unique counts only
+## Stratify by maternal-zygotic vs zygotic
+## Maternal = >0.5 RPKM at pooled 2-cell stage ribo-zero
+
+vej <- read.csv('../../public_data/dev_timecourse_zebrafish_vejnar_giraldez_rpkm_1_gene_all_all_v12.csv.gz', header=T)
+
+vej <- merge(vej, miao, by.x='gene', by.y='Geneid')
+vej$Vejnar_maternal <- ifelse(vej$WT.2c.R0 > 0.5, 'MZ', 'Z')
+
+
+pdf('output/vejnar_kinetics.pdf', 10,15)
+par(mfcol=c(3,2), pty='s')
+
+times <- c('WT.16c', 'WT.64c', 'WT.256c', 'WT.1Kc', 'WT.oblong', 'WT.sphere', 'WT.dome')
+labels <- c('16c', '64c', '256c', '1K', 'oblong', 'sphere', 'dome')
+
+
+out_table <- vej[,c('gene', 'Symbol', 'Miao_MZnps_category', 'Heyn_4su_minorwave', 'Vejnar_maternal')]
+names(out_table)[1] <- 'Geneid'
+
+
+out_summary_table <- data.frame(Stages=labels)
+
+for (rep in c('.B1', '.B2', '')) {
+	deltaRPKM <- data.frame(Geneid = vej$gene, contrast = paste0(vej$Vejnar_maternal, vej$Miao_MZnps_category))
+	
+	samples <- paste0(times, '.R0', rep)
+	time0 <- samples[1]
+	for (time in samples) {
+		deltaRPKM[,time] <- (vej[,time]+0.1) / (vej[,time0]+0.1)
+	}
+
+	for (mzgroup in c('.', 'MZ', 'Z')) {
+		mat <- subset(deltaRPKM, grepl(paste0('^', mzgroup), deltaRPKM$contrast, perl=T))
+		down_keywords <- unique(mat$contrast)[grep('Down', unique(mat$contrast))]
+		unaff_keywords <- unique(mat$contrast)[grep('Un', unique(mat$contrast))]
+
+
+		plot(0,0,xlim=c(1,length(labels)), ylim=c(-1,5), xlab='Stage', ylab='log2 Increase', axes=F, main = paste('R0', mzgroup, rep))
+		axis(1, at=1:length(labels), labels=labels)
+		axis(2)
+		down_table <- plot_kinetics(mat, down_keywords)
+		unaff_table <- plot_kinetics(mat, unaff_keywords, '#DC3220', bg_col='#DC322044')	
+
+		down_table <- data.frame(down_table)
+		unaff_table <- data.frame(unaff_table)
+		
+		names(down_table) <- paste0(rep, '.', mzgroup, '.', c('NPS_down.mean', 'NPS_down.ci_95per_low', 'NPS_down.ci_95per_high'))
+		names(unaff_table) <- paste0(rep, '.', mzgroup, '.', c('NPS_unaff.mean', 'NPS_unaff.ci_95per_low', 'NPS_unaff.ci_95per_high'))
+
+		out_summary_table <- cbind(out_summary_table, down_table, unaff_table)
+	}
+	out_table <- cbind(out_table, round(deltaRPKM[,3:ncol(deltaRPKM)], 2))
+}
+dev.off()
+
+##write.table(out_table, 'output/vejnar_kinetics_deltaSpikeInRPKM.txt', row.names=F, sep='\t', quote=F)
+
+
+###
+# Output data table for Fig 5C, S7F (need to manually reorder and rename columns)
+fig_s7f <- out_summary_table
+fig_s7f[,2:ncol(fig_s7f)] <- round(fig_s7f[,2:ncol(fig_s7f)], 3)
+write.table(fig_s7f, 'output/fig_S7f_kinetics_vejnar.txt', row.names=F, col.names=T, sep='\t', quote=F)
+
+
+
+### Data set 2: Heyn 4SU 128c, 256c, 512c
+### Warning -- timepoints labels for control samples in last 3 columns seem to be wrong
+heyn <- read.table('../../public_data/heyn_GSE47709_comb_genes_2.tsv', header=T)
+names(heyn) <- c('Geneid', 'x512c_4su_1', 'x256c_4su_1', 'x128c_4su_1', 'x512c_4su_2', 'x256c_4su_2', 'x128c_4su_2', 'x512c_ctrl', 'x256c_ctrl', 'x128c_ctrl')
+
+heyn <- merge(heyn, miao, by='Geneid') #963 genes
+heyn$Vejnar_maternal <- ifelse(heyn$Geneid %in% vej[vej$Vejnar_maternal=='MZ', 'gene'], 'MZ', 'Z')
+
+out_table <- heyn[,c('Geneid', 'Symbol', 'Miao_MZnps_category', 'Heyn_4su_minorwave', 'Vejnar_maternal')]
+
+pdf('output/heyn_kinetics.pdf', 10,15)
+par(mfcol=c(3,2), pty='s')
+
+times <- c('x128c_4su', 'x256c_4su', 'x512c_4su')
+labels <- c('128c', '256c', '512c')
+
+out_summary_table <- data.frame(Stages=labels)
+
+for (rep in c('1', '2')) {
+	rpkm <- data.frame(gene = heyn$Geneid, contrast = paste0(heyn$Vejnar_maternal, heyn$Miao_MZnps_category))
+	
+	samples <- paste0(times, '_', rep)
+	for (sample in samples) {
+		rpkm[,sample] <- (heyn[,sample]+0.1)
+	}
+
+	for (mzgroup in c('.', 'MZ', 'Z')) {
+		mat <- subset(rpkm, grepl(paste0('^', mzgroup), rpkm$contrast, perl=T))
+		down_keywords <- unique(mat$contrast)[grep('Down', unique(mat$contrast))]
+		unaff_keywords <- unique(mat$contrast)[grep('Un', unique(mat$contrast))]
+
+
+		plot(0,0,xlim=c(1,length(labels)), ylim=c(-4,4), xlab='Stage', ylab='log2 RPKM', axes=F, main = paste('4SU', mzgroup, rep))
+		axis(1, at=1:length(labels), labels=labels)
+		axis(2)
+		down_table <- plot_kinetics(mat, down_keywords)
+		unaff_table <- plot_kinetics(mat, unaff_keywords, '#DC3220', bg_col='#DC322044')
+		
+		down_table <- data.frame(down_table)
+		unaff_table <- data.frame(unaff_table)
+		
+		names(down_table) <- paste0(rep, '.', mzgroup, '.', c('NPS_down.mean', 'NPS_down.ci_95per_low', 'NPS_down.ci_95per_high'))
+		names(unaff_table) <- paste0(rep, '.', mzgroup, '.', c('NPS_unaff.mean', 'NPS_unaff.ci_95per_low', 'NPS_unaff.ci_95per_high'))
+
+		out_summary_table <- cbind(out_summary_table, down_table, unaff_table)		
+		
+	}
+	out_table <- cbind(out_table, round(rpkm[,3:ncol(rpkm)], 2))
+}
+
+dev.off()
+
+##write.table(out_table, 'output/heyn_kinetics_4SU_FPKM.txt', row.names=F, sep='\t', quote=F)
+
+###
+# Output data table for Fig S7H (need to manually reorder and rename columns)
+fig_s7h <- out_summary_table
+fig_s7h[,2:ncol(fig_s7h)] <- round(fig_s7h[,2:ncol(fig_s7h)], 3)
+write.table(fig_s7h, 'output/fig_S7h_kinetics_heyn.txt', row.names=F, col.names=T, sep='\t', quote=F)
+
+
+
+### Data set 3: White et al poly(A)+ timecourse
+### Maternal is defined by 2-cell expression > 0.5 TPM OR Vejnar classification as MZ
+### (since poly(A)+ RNA-seq is biased by poly(A) tail length)
+
+white <- read.table('../../public_data/White_zebrafish_timecourse.tsv', header=T, sep='\t', quote='')
+
+# 5 reps per stage, average them
+stages <- gsub(".1$", "", names(white)[grep('.1$', names(white))])
+for (stage in stages) {
+	white[,stage] <- apply(white[,paste0(stage, '.', 1:5)], 1, mean)
+}
+
+white <- merge(white, miao, by.x='e85.Ensembl.Gene.ID', by.y='Geneid') #1700 genes
+white$Vejnar_maternal <- ifelse(white$e85.Ensembl.Gene.ID %in% vej[vej$Vejnar_maternal=='MZ', 'gene'], 'MZ', 'Z')
+white$Consensus_maternal <- ifelse(white$Vejnar_maternal == 'MZ' | white$X2.cell > 0.5, 'MZ', 'Z')
+
+deltaTPM <- data.frame(gene = white$e85.Ensembl.Gene.ID, contrast = paste0(white$Consensus_maternal, white$Miao_MZnps_category))
+
+times <- c('X2.cell', 'X128.cell', 'X1k.cell', 'Dome', 'X50..epiboly')
+labels <- c('2c', '128c', '1Kc', 'Dome', '50e')
+
+time0 <- times[1]
+for (time in times) {
+	deltaTPM[,time] <- (white[,time]+0.1) / (white[,time0]+0.1)
+}
+
+out_summary_table <- data.frame(Stages=labels)
+
+pdf('output/white_kinetics.pdf', 5,15)
+par(mfcol=c(3,1), pty='s')
+for (mzgroup in c('.', 'MZ', 'Z')) {
+	mat <- subset(deltaTPM, grepl(paste0('^', mzgroup), deltaTPM$contrast, perl=T))
+	down_keywords <- unique(mat$contrast)[grep('Down', unique(mat$contrast))]
+	unaff_keywords <- unique(mat$contrast)[grep('Un', unique(mat$contrast))]
+
+	plot(0,0,xlim=c(1,length(labels)), ylim=c(-1,6), xlab='Stage', ylab='log2 fold diff', axes=F, main = paste('White', mzgroup))
+	axis(1, at=1:length(labels), labels=labels)
+	axis(2)
+	down_table <- plot_kinetics(mat, down_keywords)
+	unaff_table <- plot_kinetics(mat, unaff_keywords, '#DC3220', bg_col='#DC322044')	
+	
+	down_table <- data.frame(down_table)
+	unaff_table <- data.frame(unaff_table)
+		
+	names(down_table) <- paste0(mzgroup, '.', c('NPS_down.mean', 'NPS_down.ci_95per_low', 'NPS_down.ci_95per_high'))
+	names(unaff_table) <- paste0(mzgroup, '.', c('NPS_unaff.mean', 'NPS_unaff.ci_95per_low', 'NPS_unaff.ci_95per_high'))
+
+	out_summary_table <- cbind(out_summary_table, down_table, unaff_table)		
+}	
+dev.off()
+
+out_table <- white[,c('e85.Ensembl.Gene.ID', 'Symbol', 'Miao_MZnps_category', 'Heyn_4su_minorwave', 'Vejnar_maternal', 'Consensus_maternal')]
+names(out_table)[1] <- 'Geneid'
+out_table <- cbind(out_table, round(deltaTPM[,3:ncol(deltaTPM)], 2))
+##write.table(out_table, 'output/white_kinetics_delta_TPM.txt', row.names=F, sep='\t', quote=F)
+
+
+###
+# Output data table for Fig S7G (need to manually reorder and rename columns)
+fig_s7g <- out_summary_table
+fig_s7g[,2:ncol(fig_s7g)] <- round(fig_s7g[,2:ncol(fig_s7g)], 3)
+write.table(fig_s7g, 'output/fig_S7g_kinetics_white.txt', row.names=F, col.names=T, sep='\t', quote=F)
+
+
+
+### Data set 4: Bhat SLAM-Seq dataset
+### Keyed by gene symbol -- carefully merge with Ensembl
+### Maternal vs zygotic is used as classified by Bhat
+
+bhat <- read.table('../../public_data/bhat23_zf_slam_seq.txt', header=T)
+bhat <- merge(bhat, miao, by.x='Gene_ID', by.y='Symbol')
+bhat <- subset(bhat, !duplicated(Gene_ID))
+
+out_table <- bhat[,c('Geneid', 'Gene_ID', 'Miao_MZnps_category', 'Heyn_4su_minorwave', 'classification')]
+names(out_table)[2] <- 'Symbol'
+names(out_table)[5] <- 'Bhat_maternal'
+
+stages <- paste0('TP', 1:9)
+labels <- c('0.75', '2', '2.5', '3', '3.5', '4', '4.5', '5', '5.5')
+
+out_summary_table <- data.frame(Stages=paste0(labels, 'h'))
+
+pdf('output/bhat_kinetics.pdf', 10,15)
+par(mfcol=c(3,2), pty='s')
+
+for (rep in c('R1', 'R2')) {
+	deltaRPM <- data.frame(Geneid = bhat$Geneid, contrast = paste0(bhat$classification, bhat$Miao_MZnps_category))
+	
+	samples <- paste0('RPM_', rep, '_', stages)
+	time0 <- samples[1]
+	for (time in samples) {
+		deltaRPM[,time] <- (bhat[,time]+0.1) / (bhat[,time0]+0.1)
+	}
+
+	for (mzgroup in c('.', 'MZ', 'Z')) {
+		mat <- subset(deltaRPM, grepl(paste0('^', mzgroup), deltaRPM$contrast, perl=T))
+		down_keywords <- unique(mat$contrast)[grep('Down', unique(mat$contrast))]
+		unaff_keywords <- unique(mat$contrast)[grep('Un', unique(mat$contrast))]
+
+
+		plot(0,0,xlim=c(1,length(labels)), ylim=c(-1,5), xlab='Stage', ylab='log2 Increase', axes=F, main = paste('SLAMseq', mzgroup, rep))
+		axis(1, at=1:length(labels), labels=labels)
+		axis(2)
+		down_table <- plot_kinetics(mat, down_keywords)
+		unaff_table <- plot_kinetics(mat, unaff_keywords, '#DC3220', bg_col='#DC322044')		
+
+		down_table <- data.frame(down_table)
+		unaff_table <- data.frame(unaff_table)
+		names(down_table) <- paste0(rep, '.', mzgroup, '.', c('NPS_down.mean', 'NPS_down.ci_95per_low', 'NPS_down.ci_95per_high'))
+		names(unaff_table) <- paste0(rep, '.', mzgroup, '.', c('NPS_unaff.mean', 'NPS_unaff.ci_95per_low', 'NPS_unaff.ci_95per_high'))
+
+		out_summary_table <- cbind(out_summary_table, down_table, unaff_table)				
+	}
+	
+	out_table <- cbind(out_table, round(deltaRPM[,3:ncol(deltaRPM)], 2))
+}
+dev.off()
+
+##write.table(out_table, 'output/bhat_kinetics_delta_RPM.txt', row.names=F, sep='\t', quote=F)
+
+###
+# Output data table for Fig S7I (need to manually reorder and rename columns)
+fig_s7i <- out_summary_table
+fig_s7i[,2:ncol(fig_s7i)] <- round(fig_s7i[,2:ncol(fig_s7i)], 3)
+write.table(fig_s7i, 'output/fig_S7i_kinetics_bhat.txt', row.names=F, col.names=T, sep='\t', quote=F)
+
+
+

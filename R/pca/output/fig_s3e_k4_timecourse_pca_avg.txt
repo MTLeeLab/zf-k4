@@ -1,0 +1,13 @@
+PC1	PC2	PC3	stage	group
+0.876	0.28	-0.095	X1k	k4me1_enh
+-1.753	1.338	-1.098	dome	k4me1_enh
+-0.85	1.124	-0.604	shield	k4me1_enh
+0.265	0.837	-0.254	X1k	k4me2_enh
+-3.161	0.555	0.402	dome	k4me2_enh
+-1.252	0.515	0.524	shield	k4me2_enh
+-0.307	1.139	-0.325	X1k	highk4_prom
+-3.721	0	0.712	dome	highk4_prom
+-2.061	-0.488	0.989	shield	highk4_prom
+0.414	0.8	-0.255	X1k	lowk4_prom
+-1.823	0.832	-0.444	dome	lowk4_prom
+-0.929	0.386	0.403	shield	lowk4_prom

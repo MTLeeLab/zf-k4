@@ -1,0 +1,657 @@
+### Hurton et al, PLoS Biology 2025
+###
+### Miscellaneous R commands for paper figures
+###
+### File dependencies:
+###		../../public_data/White_zebrafish_timecourse.tsv
+###		data/enh_nps_motif_counts.txt
+###		data/other_tf_center.matrix (deeptools TF chip computematrix files)
+###		data/regions_500bp_nuc.bed (BEDtools base usage stats)
+###		data/bindetect_results.txt (TOBIAS output)
+###		data/jaspar_motif_clusters.txt (TOBIAS clustering output)
+###		data/enh_dist_nps_genes_strict.bed (BEDtools nearest distance to gene groups)
+###		data/enh_dist_nps_genes_strict_with_prox.bed
+###		data/nps_gene_dist_enh.bed (BEDtools nearest distance to enhancer groups)
+###		data/DAVID_allzyg_genes.txt (DAVID GO annotations per gene, post processed)
+###		data/active_enh_features_hist.matrix (deeptools matrix for various features)
+###		data/active_enh_features_other.matrix_200bp
+###		data/prox_features_hist.matrix
+###		data/prox_features_other.matrix_200bp
+###		../rna/output/atac_open_rna_cov.txt
+###		../pca/output/atac_open_predictions.txt
+
+
+
+##########
+## Utility function: parses a deeptools computematrix output file to extract the data
+
+parse_dt_table = function(INFILE, group_labels_field = 20, group_boundaries_field = 21, sample_labels_field = 22) {
+	## read deeptools computeMatrix table assuming BED6+2 cols per sample
+	## Average every 2 sample columns
+	## Return data table annotated with groups (rows)
+	
+	## This is not a robust function! Deeptools header field order is
+	## not consistent
+	
+	
+	clean_dt_head = function(instring) {
+		instring <- gsub("\\[", "", instring)
+		instring <- gsub("].*$", "", instring, perl=T)
+		strsplit(instring, ",")[[1]]
+	}
+
+	data <- read.table(INFILE, skip=1)
+
+	con <- file(INFILE,'r')
+	header <- readLines(con, n=1)
+	close(con)
+	header_fields <- strsplit(gsub("\"", "", header), ":")[[1]]
+	## print(header_fields)
+
+	# Default
+	#Field 20: group labels
+	#Field 21: group boundaries (rows)
+	#Field 22: sample labels
+
+	sample_labels <- clean_dt_head(header_fields[sample_labels_field])
+	group_labels <- clean_dt_head(header_fields[group_labels_field])
+	group_bounds <- as.numeric(clean_dt_head(header_fields[group_boundaries_field]))
+
+	avg_table <- data.frame(name=data[,4])
+	avg_table[,'group'] <- NA
+	for (i in 1:length(group_labels)) {
+		group_start = group_bounds[i]+1
+		group_end = group_bounds[i+1]
+		avg_table[group_start:group_end,'group'] <- group_labels[i]	
+	}	
+	
+	for (i in 1:length(sample_labels)) {
+		col_end <- 6+i*2
+		col_start <- col_end - 1
+
+		avg_table[,sample_labels[i]] <- apply(data[,c(col_start, col_end)], 1, function(x) mean(x, na.rm=T))
+	}
+
+	avg_table
+}
+
+
+##########
+## Fig S5G
+arghap18_expr = function() {
+	# Graph arhgap18 expression over time using the White dataset
+
+	white <- read.table('../../public_data/White_zebrafish_timecourse.tsv', header=T, sep='\t', quote='')
+	arhgap <- white[white[,1]=='ENSDARG00000074740', ]
+	stages <- unique(gsub('\\.[0-5]$', '', names(arhgap)[9:ncol(arhgap)], perl=T))
+	
+	data <- matrix(nr=5, nc=length(stages))
+	for (i in 1:length(stages)) {
+		data[,i] <- as.vector(t(arhgap[,grepl(stages[i], names(arhgap))]))
+	}
+	
+	pdf('output/arhgap18_expr.pdf', 6, 4)
+	plot(1,1, type='n', xlim=c(1,20), ylim=c(0,16))
+	for (i in 1:5){
+		points(1:length(stages), data[i,], pch=19)
+	}
+	lines(1:length(stages), apply(data.frame(data), 2, mean))
+	dev.off()
+}
+
+
+##########
+## Fig S6C
+enh_nps_motif_barplots = function() {
+	f <- read.table('data/enh_nps_motif_counts.txt', header=T)
+	f$summed <- rowSums(f[,3:5]) ## Summed N+P+S
+	
+	## Binarize
+	binary_f <- f[,1:2]
+	binary_f[,3:6] <- f[,3:6] > 0
+	names(binary_f)[3:6] <- names(f)[3:6]
+	
+	## Barplots of % containing each motif
+	pdf('output/nps_motif_per_barplot.pdf', 5, 7)
+	par(mfrow=c(2,2), las=2)
+	for (TF in names(binary_f)[3:6]) {
+		P <- chisq.test(table(binary_f[,c(TF, 'Type')]))$p.val
+	
+		barplot(proportions(table(binary_f[,c(TF, 'Type')]), margin=2), main = TF, sub = paste0('P=',P, '; Black = not bound'))
+	}
+	dev.off()
+	
+	
+	###
+	# Output data table for Fig S6C
+	fig_s6c <- binary_f
+	fig_s6c$Type <- ifelse(fig_s6c$Type=='typ_enh', 'k4me1_enh', 'k4me2_enh')
+	names(fig_s6c) <- c('Name', 'Enh_type', 'Nanog_motif', 'Pou5f3_motif', 'Sox19b_motif', 'Any_NPS_motif')
+	fig_s6c <- fig_s6c[order(fig_s6c$Enh_type), ]
+	write.table(fig_s6c, 'output/fig_S6c_motif_occur.txt', row.names=F, col.names=T, sep='\t', quote=F)
+}
+
+
+##########
+## Fig S6D
+tf_boxplots = function() {
+	data <- parse_dt_table('data/other_tf_center.matrix', group_labels_field=21, group_boundaries_field=23, sample_labels_field = 20)
+	data$group <- factor(data$group, levels = c('k4me2_enh', 'typ_enh', 'inactive'))
+	
+	
+	pdf('output/other_tf_boxplot.pdf', 7,5)
+	par(mfrow=c(2,4))
+	
+	for (SAMPLE in names(data)[3:ncol(data)]) {
+		#Wilcox test between enhancer groups
+		p <- signif(wilcox.test(data[data$group == 'typ_enh',SAMPLE], data[data$group == 'k4me2_enh',SAMPLE])$p.val, 3)
+	
+		contrast <- paste0('log2(0.1+', SAMPLE, ') ~ group')
+		boxplot(as.formula(contrast), data, lty=1, pch=19, cex = 0.5, staplewex=0, main = SAMPLE, ylab='log2 RPM+0.1', xlab='', sub = paste0("P=",p))
+			
+	}
+	dev.off()
+	
+	###
+	# Output data table for Fig S6D
+	fig_s6d <- data
+	fig_s6d[,3:ncol(fig_s6d)] <- round(log2(0.1 + fig_s6d[,3:ncol(fig_s6d)]), 3)
+	fig_s6d <- fig_s6d[,c('name', 'group', 'foxh1_dome', 'eomes', 'nfya', 'smad2_dome', 'pbx_3.5h', 'prep_3.5h')]
+	names(fig_s6d) <- c('name', 'group', 'foxh1', 'eomesa', 'nfya', 'smad2', 'pbx4', 'prep1')
+	fig_s6d$group <- ifelse(fig_s6d$group == 'typ_enh', 'k4me1_enh', as.character(fig_s6d$group))
+	
+	write.table(fig_s6d, 'output/fig_S6d_tf_chip_boxplot.txt', row.names=F, col.names=T, sep='\t', quote=F)
+}
+
+
+
+##########
+## Fig S6E
+tobias_plot = function() {
+	results <- read.table('data/bindetect_results.txt', header=T, sep='\t')
+	clusters <- read.table('data/jaspar_motif_clusters.txt')
+	names(clusters) <- c('JASPAR_ID', 'name', 'motif_cluster')
+	clusters$output_prefix <- gsub(":", "", paste0(clusters[,2], "_", clusters[,1]))
+	
+	results2 <- merge(clusters[,3:4], results, by='output_prefix', all.y=T)
+	results2 <- results2[order(results2$K4me1_K4me2_pvalue), ]
+	results3 <- results2[!duplicated(results2$motif_cluster), ]
+	
+	# Volcano plot
+	
+	pdf('output/tobias_pruned_volcano_long.pdf', 5, 10)
+	
+	par(las=1)
+	with(results3[results3$K4me1_K4me2_highlighted=="False", ], plot(K4me1_K4me2_change, -log10(K4me1_K4me2_pvalue), xlab='TOBIAS score difference', ylab='TOBIAS -log10(p)', pch=21, col="#33333333", bg="#66666666", cex=0.75, xlim=c(-1.5, 1.5), ylim=c(0,120), axes=F))
+	axis(1)
+	axis(2)
+	
+	k4me1_pts <- results3[results3$K4me1_K4me2_highlighted=="True" & results3$K4me1_K4me2_change > 0, ]
+	with(k4me1_pts, points(K4me1_K4me2_change, -log10(K4me1_K4me2_pvalue), pch=21, col="#0066FF33", bg="#0033FF99", cex=1))
+	with(k4me1_pts, text(K4me1_K4me2_change, -log10(K4me1_K4me2_pvalue), name, pos=4, cex=1.25))
+	
+	k4me2_pts <- results3[results3$K4me1_K4me2_highlighted=="True" & results3$K4me1_K4me2_change < 0, ]
+	with(k4me2_pts, points(K4me1_K4me2_change, -log10(K4me1_K4me2_pvalue), pch=21, col="#FF333333", bg="#FF333399", cex=1))
+	with(k4me2_pts, text(K4me1_K4me2_change, -log10(K4me1_K4me2_pvalue), name, pos=2, cex=1.25))
+	
+	# Bonferonni correction
+	abline(h=-log10(0.05 / nrow(results2)))
+	
+	dev.off()
+	
+	###
+	# Output data table for Fig S6E
+	fig_s6e <- results3
+	fig_s6e <- fig_s6e[,c('name', 'motif_id','total_tfbs', 'K4me1_mean_score', 'K4me1_bound', 'K4me2_mean_score', 'K4me2_bound', 'K4me1_K4me2_change', 'K4me1_K4me2_pvalue')]
+	write.table(fig_s6e, 'output/fig_S6e_tobias.txt', row.names=F, col.names=T, sep='\t', quote=F)
+}
+
+
+##########
+## Fig S6G,H
+cpg_boxplots = function() {
+	nuc <- read.table('data/regions_500bp_nuc.bed')
+	
+	names(nuc) <- c("chr","start","end","name", "score", "strand", "enh_type", "AT_per","GC_per","A","C","G","T","N","other","length","CpG")
+	
+	nuc$enh_type <- factor(nuc$enh_type, levels = c('typ_enh', 'k4me2_enh', 'prom'))
+	
+	
+	pdf('output/boxplot_cpg.pdf', 9, 9)
+	par(mfrow=c(1,3))
+	boxplot(AT_per ~ enh_type, nuc, staplewex=0, lty=1, pch=19)
+	
+	p1 <- round(wilcox.test(GC_per ~ enh_type, nuc[nuc$enh_type %in% c('typ_enh', 'k4me2_enh'),])$p.val, 3)
+	p2 <- round(wilcox.test(GC_per ~ enh_type, nuc[nuc$enh_type %in% c('prom', 'k4me2_enh'),])$p.val, 3)
+	
+	boxplot(GC_per ~ enh_type, nuc, staplewex=0, lty=1, pch=19, sub=paste0("P_enh=", p1, " P_ep=", p2))
+	
+	
+	p1 <- signif(wilcox.test(CpG/length ~ enh_type, nuc[nuc$enh_type %in% c('typ_enh', 'k4me2_enh'),])$p.val, 3)
+	p2 <- signif(wilcox.test(CpG/length ~ enh_type, nuc[nuc$enh_type %in% c('prom', 'k4me2_enh'),])$p.val, 3)
+	
+	boxplot(CpG/length ~ enh_type, nuc, staplewex=0, lty=1, pch=19, sub=paste0("P_enh=", p1, " P_ep=", p2))
+	dev.off()
+	
+	
+	###
+	# Output data table for Fig S7G, S7H
+	fig_s6gh <- nuc[,c('name', 'enh_type', 'GC_per', 'CpG', 'length')]
+	fig_s6gh$enh_type <- ifelse(fig_s6gh$enh_type == 'typ_enh', 'k4me1_enh', as.character(fig_s6gh$enh_type))
+	fig_s6gh$CpG <- round(fig_s6gh$CpG / fig_s6gh$length, 3)
+	fig_s6gh <- fig_s6gh[order(fig_s6gh$enh_type), 1:4]
+	names(fig_s6gh) <- c('name', 'group', 'GC_prop', 'CpG_prop')
+	write.table(fig_s6gh, 'output/fig_S6gh_cpg.txt', row.names=F, col.names=T, sep='\t', quote=F)
+}
+
+
+##########
+## Fig S7C (Fig 5A)
+dist_boxplots = function() {
+	## Boxplots of distance from enhancer to closest NPS down/unaffected gene
+	## (chromosomal enhancers only)
+	## All Proximal elements are included in the loose group
+	## Strict with prox only includes k4me2_hi and k4me1_only prox
+	
+	## Distals only
+	enh <- read.table('data/enh_dist_nps_genes_strict.bed')
+	names(enh) <- c('chr', 'start', 'end', 'name', 'cat', 'strand', 'nps_down_miao', 'nps_unaff_miao')
+	
+	pdf('output/boxplots enh dist.pdf', 5,5)
+	par(mfrow=c(1,2), las=2, oma=c(3, 1, 1, 1))
+	boxplot(log10(nps_down_miao+1) ~ cat, enh, lty=1, ylim=c(0, 7.2), pch=19, cex=0.25, staplewex=0)
+	boxplot(log10(nps_unaff_miao+1) ~ cat, enh, lty=1, ylim=c(0, 7.2), pch=19, cex=0.25, staplewex=0)
+	dev.off()
+	
+	k4me2 <- subset(enh, cat=='k4me2_hi')
+	typical <- subset(enh, cat == 'k4me1_only')
+	
+	## Within gene group, compare enh distances
+	wilcox.test(k4me2$nps_unaff_miao, typical$nps_unaff_miao) #3.279e-06
+	wilcox.test(k4me2$nps_down_miao, typical$nps_down_miao) #0.06317
+	
+	## Across gene groups
+	wilcox.test(k4me2$nps_unaff_miao, k4me2$nps_down_miao, paired=T)$p.val #6.477291e-16
+	wilcox.test(typical$nps_unaff_miao, typical$nps_down_miao, paired=T)$p.val #7.592159e-32
+	
+	## Marginal counts
+	table(enh$cat)
+	
+	# k4me1_only   k4me2_hi 
+	#       3283        895 
+	
+	## Distals and prox
+	enh <- read.table('data/enh_dist_nps_genes_strict_with_prox.bed')
+	names(enh) <- c('chr', 'start', 'end', 'name', 'cat', 'strand', 'nps_down_miao', 'nps_unaff_miao')
+	
+	enh$cat2 <- gsub("prox_", "", enh$cat)
+	
+	pdf('output/boxplots enh dist with prox.pdf', 5,5)
+	par(mfrow=c(1,2), las=2, oma=c(3, 1, 1, 1))
+	boxplot(log10(nps_down_miao+1) ~ cat2, enh, lty=1, ylim=c(0, 7.2), pch=19, cex=0.25, staplewex=0)
+	boxplot(log10(nps_unaff_miao+1) ~ cat2, enh, lty=1, ylim=c(0, 7.2), pch=19, cex=0.25, staplewex=0)
+	dev.off()
+	
+	k4me2 <- subset(enh, cat2=='k4me2_hi')
+	typical <- subset(enh, cat2 == 'k4me1_only')
+	
+	## Within gene group, compare enh distances
+	wilcox.test(k4me2$nps_unaff_miao, typical$nps_unaff_miao) #8.863e-15
+	wilcox.test(k4me2$nps_down_miao, typical$nps_down_miao) #0.1371
+	
+	## Across gene groups
+	wilcox.test(k4me2$nps_unaff_miao, k4me2$nps_down_miao, paired=T)$p.val #6.875934e-35
+	wilcox.test(typical$nps_unaff_miao, typical$nps_down_miao, paired=T)$p.val #2.059947e-37
+	
+	
+	###
+	# Output data table for Fig 5A, S7C
+	fig_s7c <- enh[,c('name', 'cat2', 'cat', 'nps_down_miao', 'nps_unaff_miao')]
+	fig_s7c$cat2 <- ifelse(fig_s7c$cat2 == 'k4me1_only', 'k4me1_enh', 'k4me2_enh')
+	fig_s7c$cat <- ifelse(grepl('prox', fig_s7c$cat), 'proximal', 'distal')
+	names(fig_s7c) <- c('name', 'group', 'position', 'dist_nearest_nps_down_gene', 'dist_nearest_unaff_gene')
+	fig_s7c <- fig_s7c[order(fig_s7c$group, fig_s7c$position), ]
+	
+	write.table(fig_s7c, 'output/fig_5a_s7c_enh_dist.txt', row.names=F, col.names=T, sep='\t', quote=F)
+}
+
+
+##########
+## Fig S7D
+dist_barplots = function() {
+	## Bar plots to summarize proportion of genes within X distance of
+	## each enhancer class
+	
+	genes <- read.table('data/nps_gene_dist_enh.bed')
+	names(genes) <- c('chr', 'start', 'end', 'name', 'miao_cat', 'k4me1_strict_dist', 'k4me2_strict_dist', 'k4me1_loose_dist', 'k4me2_loose_dist')
+	
+	genes$within100kb_me1 <- factor(with(genes,
+		ifelse(k4me1_strict_dist < 1e5, 'strict',
+		ifelse(k4me1_loose_dist < 1e5, 'loose', 'no'))), levels = c('strict', 'loose', 'no'))
+		
+	genes$within100kb_me2 <- factor(with(genes,
+		ifelse(k4me2_strict_dist < 1e5, 'strict',
+		ifelse(k4me2_loose_dist < 1e5, 'loose', 'no'))), levels = c('strict', 'loose', 'no'))
+	
+		
+	genes$within1Mb_me1 <- factor(with(genes,
+		ifelse(k4me1_strict_dist < 1e6, 'strict',
+		ifelse(k4me1_loose_dist < 1e6, 'loose', 'no'))), levels = c('strict', 'loose', 'no'))
+		
+	genes$within1Mb_me2 <- factor(with(genes,
+		ifelse(k4me2_strict_dist < 1e6, 'strict',
+		ifelse(k4me2_loose_dist < 1e6, 'loose', 'no'))), levels = c('strict', 'loose', 'no'))
+				
+	pdf('output/barplot_genes_within_enh_dist.pdf',7,7)
+	par(mfrow=c(2,2))
+	
+	barplot(proportions(table(genes[,c('within100kb_me1','miao_cat')]), margin=2), main='Within 100kb K4me1', ylab='Prop', legend.text=T)
+	
+	#                miao_cat
+	# within100kb_me1      Down     Unaff
+	#          strict 0.4413893 0.2890909
+	#          loose  0.1895803 0.2427273
+	#          no     0.3690304 0.4681818
+	
+	
+	barplot(proportions(table(genes[,c('within1Mb_me1','miao_cat')]), margin=2), main='Within 1Mb K4me1', ylab='Prop')
+	
+	#              miao_cat
+	# within1Mb_me1       Down      Unaff
+	#        strict 0.93487699 0.94272727
+	#        loose  0.05499276 0.04090909
+	#        no     0.01013025 0.01636364
+	
+	
+	barplot(proportions(table(genes[,c('within100kb_me2','miao_cat')]), margin=2), main='Within 100kb K4me2', ylab='Prop')
+	
+	#                miao_cat
+	# within100kb_me2      Down     Unaff
+	#          strict 0.2228654 0.1645455
+	#          loose  0.3342981 0.3636364
+	#          no     0.4428365 0.4718182
+	
+	
+	barplot(proportions(table(genes[,c('within1Mb_me2','miao_cat')]), margin=2), main='Within 1Mb K4me2', ylab='Prop')
+	
+	#              miao_cat
+	# within1Mb_me2       Down      Unaff
+	#        strict 0.68017366 0.71909091
+	#        loose  0.28075253 0.25909091
+	#        no     0.03907381 0.02181818
+	
+	dev.off()
+		
+	## Stat tests
+	
+	# 100kb strict k4me1 nps down vs unaff
+	table(genes[,c('miao_cat', 'within100kb_me1')])
+	chisq.test(matrix(c(305,318,131+255,267+515), nr=2))$p.val  #6.300615e-11
+	
+	# 100kb strict k4me2 nps down vs unaff
+	table(genes[,c('miao_cat', 'within100kb_me2')])
+	chisq.test(matrix(c(154,181,231+306,400+519), nr=2))$p.val  #0.00253779	
+	
+	###
+	# Output data table for Fig S7D
+	fig_s7d <- genes[,c(4:ncol(genes))]
+	names(fig_s7d) <- c('Gene', 'nps_effect', 'dist_to_k4me1_enh_strict', 'dist_to_k4me2_enh_strict', 'dist_to_k4me1_enh_loose', 'dist_to_k4me2_enh_loose',
+	'within100kb_k4me1_enh', 'within100kb_k4me2_enh', 'within1Mb_k4me1_enh', 'within1Mb_k4me2_enh')
+	fig_s7d <- fig_s7d[order(fig_s7d$nps_effect), ]
+	write.table(fig_s7d, 'output/fig_s7d_nps_gene_dist.txt', row.names=F, col.names=T, sep='\t', quote=F)
+}
+
+
+##########
+## Fig S7E
+go_analysis = function() {
+	## GO enrich of activated genes within 50kb of enhancers by class
+	##
+	## Starting with Miao activated genes
+	## - Upload Gene IDs to DAVID, select only the Gene_Ontology check boxes (3)
+	## and get the Functional Annotation Table
+	## - Post process to get a table of Gene - GO term
+	##
+	## Then, find genes within 100K of each enhancer class and look for
+	## enriched terms in one gene group vs the other.
+	##
+	
+	go <- read.table('data/DAVID_allzyg_genes.txt')
+	genes <- read.table('data/nps_gene_dist_enh.bed')
+	names(genes) <- c('chr', 'start', 'end', 'gene', 'nps', 'dist_k4me1_strict', 'dist_k4me2_strict', 'dist_k4me1_loose', 'dist_k4me2_loose')
+	
+	k4me1 <- subset(genes, dist_k4me1_strict <= 100000 & gene %in% go[,1], select=gene) #530 genes
+	k4me2 <- subset(genes, dist_k4me2_strict <= 100000 & gene %in% go[,1], select=gene) #268 genes
+	
+	N1=nrow(k4me1)
+	N2=nrow(k4me2)
+	
+	k4me1_terms <- go[go[,1] %in% k4me1[,1], 2]
+	k4me2_terms <- go[go[,1] %in% k4me2[,1], 2]
+	
+	go_counts <- merge(data.frame(table(k4me1_terms)), data.frame(table(k4me2_terms)), by=1, all=T)
+	names(go_counts) <- c('Term', 'k4me1', 'k4me2')
+	go_counts[is.na(go_counts)] <- 0
+	
+	# Limit analysis to go terms with at least 5 genes
+	go_counts5 <- subset(go_counts, k4me1+k4me2 >= 5)
+	
+	## Perform a fishers test for each row
+	pvals <- c()
+	enrich <- c()
+	for (i in 1:nrow(go_counts5)) {
+		p <- fisher.test(matrix(c(go_counts5[i,2], go_counts5[i,3], N1-go_counts5[i,2], N2-go_counts5[i,3]), nr=2))$p.value
+		pvals <- c(pvals, p)
+		
+		enrich <- c(enrich, log2((0.5+go_counts5[i,2])/N1) - log2((0.5+go_counts5[i,3])/N2))
+	}
+	
+	go_counts5$lg_enrich <- enrich
+	go_counts5$fisher.p <- pvals
+	go_counts5$padj <- p.adjust(go_counts5$fisher.p)
+	
+	sig_terms <- go_counts5[go_counts5$fisher.p < 0.1 & abs(go_counts5$lg_enrich) > 1, ]
+	sig_terms <- sig_terms[order(sig_terms$lg_enrich), ]
+	
+	pdf('output/go_100k_strict_enh_gene.pdf', 12, 6)
+	par(las=1, oma=c(2,30,2,2))
+	barplot(sig_terms$lg_enrich, names.arg=paste0(sig_terms$Term, ' (P=', round(sig_terms$fisher.p, 3), ')'), horiz=T, xlab='log2 Enrichment K4me1 vs K4me2 associated genes')
+	dev.off()
+	
+	
+	###
+	# Output data table for Fig S7E
+	fig_s7e <- go_counts5
+	names(fig_s7e) <- c('Term', 'k4me1_enh_assoc', 'k4me2_enh_assoc', 'lg_enrich', 'p_val' ,'padj')
+	fig_s7e <- fig_s7e[order(fig_s7e$p_val), ]
+	fig_s7e$lg_enrich <- round(fig_s7e$lg_enrich, 3)
+	fig_s7e$p_val <- signif(fig_s7e$p_val, 3)
+	fig_s7e$padj <- signif(fig_s7e$padj, 3)
+	write.table(fig_s7e, 'output/fig_S7e_go.txt', row.names=F, col.names=T, sep='\t', quote=F)
+}
+
+
+##########
+## DNA methylation-related figures, Fig 4E, S7B, S6I
+dname_analysis = function() {
+	data1 <- parse_dt_table('data/active_enh_features_hist.matrix')
+	data2 <- parse_dt_table('data/active_enh_features_other.matrix_200bp')
+	
+	cr_data <- read.table('../pca/output/atac_open_predictions.txt',header=T)
+	k4_enrich <- cr_data[,c('name', 'dome_k4me1_lg_enrich', 'dome_k4me2_lg_enrich')]
+	
+	data_all <- merge(data1, k4_enrich, by='name')
+	data_all <- merge(data_all, data2, by='name')
+	
+	## meth quantiles
+	data_all$sph_meth <- with(data_all,
+			ifelse(is.na(sphere_bis_CpG_frac), 'N/A',
+			ifelse(sphere_bis_CpG_frac < 20, 'LOW',
+			ifelse(sphere_bis_CpG_frac < 80, 'MID', 'HIGH'))))
+	data_all$sph_meth <- factor(data_all$sph_meth, levels = c('LOW', 'MID', 'HIGH', 'N/A'))
+	
+	data_all$egg_meth <- with(data_all,
+			ifelse(is.na(egg_bis_CpG_frac), 'N/A',
+			ifelse(egg_bis_CpG_frac < 20, 'LOW',
+			ifelse(egg_bis_CpG_frac < 80, 'MID', 'HIGH'))))
+	data_all$egg_meth <- factor(data_all$egg_meth, levels = c('LOW', 'MID', 'HIGH', 'N/A'))
+	
+	data_all$sperm_meth <- with(data_all,
+			ifelse(is.na(sperm_bis_CpG_frac), 'N/A',
+			ifelse(sperm_bis_CpG_frac < 20, 'LOW',
+			ifelse(sperm_bis_CpG_frac < 80, 'MID', 'HIGH'))))
+	data_all$sperm_meth <- factor(data_all$sperm_meth, levels = c('LOW', 'MID', 'HIGH', 'N/A'))
+	
+	
+	## Exclude regions that have RNA-seq evidence as determined in the RNA analysis
+	rna_evidence <- read.table('../rna/output/atac_open_rna_cov.txt', header=T, sep='\t')
+	pred_tss <- subset(rna_evidence, tx_anno == 'tss_plus' | tx_anno == 'tss_minus')
+	
+	data_all <- data_all[!data_all$name %in% pred_tss$name, ]
+
+	table(data_all[,c('egg_meth', 'sph_meth')])
+	#         sph_meth
+	# egg_meth  LOW  MID HIGH  N/A
+	#     LOW   345   65  320  350
+	#     MID   124  102  978  318
+	#     HIGH   24   41  819  346
+	#     N/A   210   93  986 1600
+	
+	
+	table(data_all[,c('sperm_meth', 'sph_meth')])
+	#          sph_meth
+	# sperm_meth  LOW  MID HIGH  N/A
+	#       LOW   501   13    2   60
+	#       MID    30  113   22   28
+	#       HIGH    0   95 2665  301
+	#       N/A   172   80  414 2225
+	
+	## Hypomethylated enh at sphere: 345/(345+124+24) = 0.700 hypomethylated in egg
+	## 501 / (501+30) = 0.944 hypomethylated in sperm
+	
+	## Bargraph hypomethylated sphere enhancers -- oocyte only, oocyte+sperm, sperm only
+	data_comparable <- subset(data_all, egg_meth != 'N/A' & sperm_meth != 'N/A' & sph_meth != 'N/A')
+	ooonly <- with(data_comparable, sum(sph_meth == 'LOW' & egg_meth == 'LOW' & sperm_meth != 'LOW'))
+	sponly <- with(data_comparable, sum(sph_meth == 'LOW' & egg_meth != 'LOW' & sperm_meth == 'LOW'))
+	bothmeth <- with(data_comparable, sum(sph_meth == 'LOW' & egg_meth == 'LOW' & sperm_meth == 'LOW'))
+	
+	pdf('output/barplot_sph_enh_oosp_meth.pdf', 3,7)
+	barplot(matrix(c(ooonly, bothmeth, sponly)/(ooonly+bothmeth+sponly)), sub='oo/both/sperm')
+	dev.off()	
+
+	## Biplots comparing meth proportions
+	pdf('output/enh_meth_biplots.pdf', 7, 4)
+	par(mfrow=c(1,2), pty='s')
+	with(data_all, plot(egg_bis_CpG_frac, sphere_bis_CpG_frac, cex=0.5, pch=21, col='#33333333', bg='#99999933'))
+	with(data_all, plot(sperm_bis_CpG_frac, sphere_bis_CpG_frac, cex=0.5, pch=21, col='#33333333', bg='#99999933'))
+	dev.off()
+
+	## Boxplots conditioning on sphere meth prop
+	
+	pdf('output/boxplot_enh_features.pdf', 3,12)
+	par(mfrow=c(5,1), oma=c(1,1,1,1))
+	boxplot(dome_k4me2_lg_enrich ~ sph_meth, data_all, lty=1, cex=0.25, pch=19, staplewex=0)
+	boxplot(nps_vs_wt_atac_log2 ~ sph_meth, data_all, lty=1, cex=0.25, pch=19, staplewex=0)
+	boxplot(nps_vs_wt_k27ac_log2 ~ sph_meth, data_all, lty=1, cex=0.25, pch=19, staplewex=0)
+	boxplot(log2(0.1+sphere_h2az) ~ sph_meth, data_all, lty=1, cex=0.25, pch=19, staplewex=0)
+	boxplot(sphere_bis_CpG_frac ~ sph_meth, data_all, lty=1, cex=0.25, pch=19, staplewex=0)
+	dev.off()
+	
+	## Calculate p-values, but omit NA values
+	aa <- droplevels(subset(data_all, sph_meth != 'N/A'))
+	
+	kruskal.test(dome_k4me2_lg_enrich ~ sph_meth, aa)$p.val  #2.461373e-132
+	kruskal.test(nps_vs_wt_atac_log2 ~ sph_meth, aa)$p.val  #3.957784e-163
+	kruskal.test(nps_vs_wt_k27ac_log2 ~ sph_meth, aa)$p.val  #2.4428e-129
+	kruskal.test(sphere_h2az ~ sph_meth, aa)$p.val   #1.394196e-303
+
+	## Similar boxplots for TSS-proximal elements
+	## Remove all K4me3 elements; remove elements with RNA-seq evidence
+	##
+	
+	data1p <- parse_dt_table('data/prox_features_hist.matrix')
+	data2p <- parse_dt_table('data/prox_features_other.matrix_200bp')
+	
+	data_p <- merge(data1p, k4_enrich, by='name')
+	data_p <- merge(data_p, data2p, by='name')
+	data_p <- subset(data_p, group.x != 'k4me3')
+	
+	data_p <- data_p[!data_p$name %in% pred_tss$name, ]
+	
+	table(data_p$group.x)
+	# k4me1 k4me2 
+	#   411  1217 
+	
+	data_p$sph_meth <- with(data_p,
+			ifelse(is.na(sphere_bis_CpG_frac), 'N/A',
+			ifelse(sphere_bis_CpG_frac < 20, 'LOW',
+			ifelse(sphere_bis_CpG_frac < 80, 'MID', 'HIGH'))))
+	data_p$sph_meth <- factor(data_p$sph_meth, levels = c('LOW', 'MID', 'HIGH', 'N/A'))
+	
+	pdf('output/boxplot_prox_features.pdf', 3,12)
+	par(mfrow=c(5,1), oma=c(1,1,1,1))
+	boxplot(dome_k4me2_lg_enrich ~ sph_meth, data_p, lty=1, cex=0.25, pch=19, staplewex=0)
+	boxplot(nps_vs_wt_atac_log2 ~ sph_meth, data_p, lty=1, cex=0.25, pch=19, staplewex=0)
+	boxplot(nps_vs_wt_k27ac_log2 ~ sph_meth, data_p, lty=1, cex=0.25, pch=19, staplewex=0)
+	boxplot(log2(0.1+sphere_h2az) ~ sph_meth, data_p, lty=1, cex=0.25, pch=19, staplewex=0)
+	boxplot(sphere_bis_CpG_frac ~ sph_meth, data_p, lty=1, cex=0.25, pch=19, staplewex=0)
+	dev.off()
+	
+	## Calculate p-values, but omit NA values
+	aa <- droplevels(subset(data_p, sph_meth != 'N/A'))
+	
+	kruskal.test(dome_k4me2_lg_enrich ~ sph_meth, aa)$p.val  #4.423741e-65
+	kruskal.test(nps_vs_wt_atac_log2 ~ sph_meth, aa)$p.val  #1.969119e-34
+	kruskal.test(nps_vs_wt_k27ac_log2 ~ sph_meth, aa)$p.val  #2.827895e-30
+	kruskal.test(sphere_h2az ~ sph_meth, aa)$p.val   #1.435003e-114
+
+	###
+	# Output data table for Fig S6I
+	
+	fig_s6i <- data_all[,c('name', 'egg_bis_CpG_frac', 'sperm_bis_CpG_frac', 'sphere_bis_CpG_frac')]
+	fig_s6i[,2:4] <- round(fig_s6i[,2:4], 3)
+	names(fig_s6i) <- c('name', 'egg_DNAme_prop', 'sperm_DNAme_prop', 'sphere_DNAme_prop')
+	
+	write.table(fig_s6i, 'output/fig_S6i_gamete_meth_prop.txt', row.names=F, col.names=T, sep='\t', quote=F)
+	
+	
+	###
+	# Output data table for Fig 4E, S7B
+	
+	fig_4e <- data_all[,c('name', 'sph_meth', 'dome_k4me2_lg_enrich', 'nps_vs_wt_atac_log2', 'nps_vs_wt_k27ac_log2', 'sphere_h2az', 'sphere_bis_CpG_frac')]
+	fig_4e$sphere_h2az <- log2(0.1+fig_4e$sphere_h2az)
+	
+	fig_4e <- subset(fig_4e, sph_meth != 'N/A')
+	fig_4e[,3:ncol(fig_4e)] <- round(fig_4e[,3:ncol(fig_4e)], 3)
+	fig_4e <- fig_4e[order(fig_4e$sph_meth), ]
+	names(fig_4e) <- c('name', 'DNAme_group', 'lg_k4me2_enrich', 'lg_mznps_atac', 'lg_mznps_k27ac', 'lg_h2az', 'sphere_DNAme_prop')
+	
+	write.table(fig_4e, 'output/fig_4e_enh_meth_corr_boxplots.txt', row.names=F, col.names=T, sep='\t', quote=F)
+	
+	
+	fig_s7b <- data_p[,c('name', 'sph_meth', 'dome_k4me2_lg_enrich', 'nps_vs_wt_atac_log2', 'nps_vs_wt_k27ac_log2', 'sphere_h2az', 'sphere_bis_CpG_frac')]
+	fig_s7b$sphere_h2az <- log2(0.1+fig_s7b$sphere_h2az)
+	
+	fig_s7b <- subset(fig_s7b, sph_meth != 'N/A')
+	fig_s7b[,3:ncol(fig_s7b)] <- round(fig_s7b[,3:ncol(fig_s7b)], 3)
+	fig_s7b <- fig_s7b[order(fig_s7b$sph_meth), ]
+	names(fig_s7b) <- c('name', 'DNAme_group', 'lg_k4me2_enrich', 'lg_mznps_atac', 'lg_mznps_k27ac', 'lg_h2az', 'sphere_DNAme_prop')
+	
+	write.table(fig_s7b, 'output/fig_S7b_prox_meth_corr_boxplots.txt', row.names=F, col.names=T, sep='\t', quote=F)
+}
+
+
+
+
+##########
+## Run all
+
+arghap18_expr()
+enh_nps_motif_barplots()
+tf_boxplots()
+tobias_plot()
+cpg_boxplots()
+dist_boxplots()
+dist_barplots()
+go_analysis()
+dname_analysis()

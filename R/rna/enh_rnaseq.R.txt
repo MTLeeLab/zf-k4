@@ -1,0 +1,195 @@
+### Hurton et al, PLoS Biology 2025
+###
+### RNA-seq analysis to evaluate whether enhancers look like promoters
+###
+### Classify regions according to strand-specific RNA patterns up/downstream
+###
+### File dependencies:
+###			../pca/output/atac_open_predictions.txt
+###			../pca/output/atac_select_k4me2_refined.bed
+###			data/read_counts.txt
+### 		data/atac_centers.bed (from analysis3/rna)
+###
+###			[RNA-seq coverage on atac centers from analysis3/rna]
+### 		data/left_100.bed
+### 		data/left2_100.bed
+### 		data/left2_100_exon_overlaps.bed
+### 		data/right_100.bed
+### 		data/right2_100.bed
+### 		data/right2_100_exon_overlaps.bed
+###
+### Left/right = 100bp upstream and downstream coverage from atac center
+### Left2/right2 = 100bp upstream and downstream coverage from atac boundary
+###
+### Upstream and downstream are defined by genomic coordinates, not relative
+### to strand (which is unknown for enhancers)
+
+
+
+## Total read counts for RPKM normalization (100 bp region)
+read_counts <- read.table('data/read_counts.txt', header=F)
+norm_factors <- 10 * 1e6 / c(read_counts[,2], read_counts[,2])
+
+
+## RNA-seq coverage over time
+## RPKM normalize
+
+data <- read.table("data/atac_centers.bed")[,1:4]
+names(data) <- c("chr","start", "end", "name")
+
+## Merge in annotations
+anno <- read.table('../pca/output/atac_open_predictions.txt', header=T)
+row.names(anno) <- anno$name
+anno <- anno[,c('category', 'strand', 'gene')]
+anno <- anno[data$name, ]
+data <- cbind(data, anno)
+
+for (file in c('left', 'left2', 'right', 'right2')) {
+	cov <- read.table(paste0('data/', file, '_100.bed'))
+	# print(sum(cov[,4] != data[,4]))  ##line order check
+
+	cov <- round(cov[,7:ncol(cov)] * norm_factors, 2)
+	
+	names(cov) <- paste0(c("clickit_sense", "dome_sense","x50e_sense","shield_sense", "x75e_sense", "clickit_anti", "dome_anti","x50e_anti","shield_anti", "x75e_anti"), "_", file)
+	
+	data <- cbind(data, cov)
+}
+
+
+## Annotations for overlapping exons
+
+exon_left <- read.table('data/left2_100_exon_overlaps.bed')
+exon_right <- read.table('data/right2_100_exon_overlaps.bed')
+
+data$exonic_plus_left <- ifelse(exon_left$V5 > 0, "X", ".")
+data$exonic_minus_left <- ifelse(exon_left$V6 > 0, "X", ".")
+
+data$exonic_plus_right <- ifelse(exon_right$V5 > 0, "X", ".")
+data$exonic_minus_right <- ifelse(exon_right$V6 > 0, "X", ".")
+
+
+## RNA-seq evidence (not necessarily originating at element)
+## Also test 2-fold difference comparing upstream and downstream (directional)
+
+THRESH1=1
+THRESH2=1
+FI=2
+
+## Temporary table with tx annotations
+## sense_right and anti_left represent canonical gene signal
+## Sense and antisense are with respect to genome
+
+for (STAGE in c('clickit', 'dome', 'x50e', 'shield', 'x75e')) {
+	if (STAGE == 'clickit') {THRESH=THRESH1}
+	else {THRESH=THRESH2}
+
+	s_rt <- paste0(STAGE, '_sense_right')
+	s_rt2 <- paste0(STAGE, '_sense_right2')
+	s_lf <- paste0(STAGE, '_sense_left')
+	s_lf2 <- paste0(STAGE, '_sense_left2')
+
+	a_lf <- paste0(STAGE, '_anti_left')
+	a_lf2 <- paste0(STAGE, '_anti_left2')
+	a_rt <- paste0(STAGE, '_anti_right')
+	a_rt2 <- paste0(STAGE, '_anti_right2')
+
+	## Sense RNA biased to the right
+	data[,paste0(STAGE, '_right_tx')] <-
+		ifelse(apply(data[,c(s_rt, s_rt2, s_lf, s_lf2)], 1, max) >= THRESH, 
+			ifelse( (0.5+data[,s_rt2]) / (0.5+data[,s_lf2]) >= FI, 'tss', 'int'), 'non')
+
+
+	## Antisense RNA biased to the left
+	data[,paste0(STAGE, '_left_tx')] <-
+		ifelse(apply(data[,c(a_lf, a_lf2, a_rt, a_rt2)], 1, max) >= THRESH,
+			ifelse( (0.5+data[,a_lf2]) / (0.5+data[,a_rt2]) >= FI, 'tss', 'int'), 'non')
+
+}
+
+## Potential TSS: directional RNA-seq in at least 2 poly(A) datasets
+
+tss_plus <- with(data, (dome_right_tx == 'tss') + (x50e_right_tx == 'tss') + (shield_right_tx == 'tss') + (x75e_right_tx == 'tss') >= 2)
+
+tss_minus <- with(data, (dome_left_tx == 'tss') + (x50e_left_tx == 'tss') + (shield_left_tx == 'tss') + (x75e_left_tx == 'tss') >= 2)
+
+
+## Does the RNA-seq coverage look intronic?
+
+intron_plus <- with(data, clickit_right_tx == 'int' | dome_right_tx == 'int' | x50e_right_tx == 'int' | shield_right_tx == 'int' | x75e_right_tx == 'int')
+
+intron_minus <- with(data, clickit_left_tx == 'int' | dome_left_tx == 'int' | x50e_left_tx == 'int' | shield_left_tx == 'int' | x75e_left_tx == 'int')
+
+
+## Pick the highest coverage to set tx direction
+
+right_cov <- apply(data[,c('clickit_sense_right', 'dome_sense_right', 'x50e_sense_right', 'shield_sense_right', 'x75e_sense_right')], 1, max)
+left_cov <- apply(data[,c('clickit_anti_left', 'dome_anti_left', 'x50e_anti_left', 'shield_anti_left', 'x75e_anti_left')], 1, max)
+
+data$tx_anno <- ifelse(tss_plus & tss_minus, ifelse(right_cov > left_cov, 'tss_plus', 'tss_minus'),
+	ifelse(tss_plus, 'tss_plus',
+	ifelse(tss_minus, 'tss_minus',
+	ifelse(intron_plus & intron_minus, ifelse(right_cov > left_cov, 'overlap_plus', 'overlap_minus'),
+	ifelse(intron_plus, 'overlap_plus',
+	ifelse(intron_minus, 'overlap_minus', 'minimal'))))))
+
+
+## Adjustments:
+## Distal elements labeled TSS whose flanks overlap a known exon in the correct
+## orientation are not considered likely TSSs
+
+data$tx_anno <- with(data, ifelse(exonic_plus_right == 'X' & tx_anno == 'tss_plus' & category == 'dist', 'overlap_plus', tx_anno))
+
+data$tx_anno <- with(data, ifelse(exonic_minus_left == 'X' & tx_anno == 'tss_minus' & category == 'dist', 'overlap_minus', tx_anno))
+
+data$tx_anno <- factor(data$tx_anno, levels = c('tss_plus', 'tss_minus', 'overlap_plus', 'overlap_minus', 'minimal'))
+
+
+## Write out the RPKM and final annotation
+## WARNING: Uses column numbers
+data_out <- data[,c(1:7, 62, 8:51)]
+write.table(data_out, 'output/atac_open_rna_cov.txt', row.names=F, quote=F, sep='\t')
+
+
+## Merge RNA-seq categories with refined SVM prom/enh categories to visualize
+## in Deeptools (underlies Fig 2B)
+
+atac_regions <- read.table('../pca/output/atac_select_k4me2_refined.bed')
+atac_regions <- subset(atac_regions, grepl('active', V5))
+
+a <- merge(atac_regions, data_out, by.x='V4', by.y='name')
+
+## For simplicity, pool non-tss tx categories; remove lowk4_proms
+## Sort by tss_left, tss_right, other; and then by expression level descending
+##
+## Make a version with only a random subset of genes;
+## and a version with only PLE predicted TSSs
+
+a$tx_anno <- factor(ifelse(grepl('tss', a$tx_anno), as.character(a$tx_anno), 'non'), levels = c('tss_minus', 'tss_plus', 'non'))
+a <- subset(a, V5 != 'active.enh.like.prom')
+a$V5 <- factor(a$V5, levels = c('active.enh.like.dist', 'active.prom.like.dist', 'active.prom.like.prom'))
+a$expr_level <- rowSums(a[,14:53])
+a <- a[order(a$V5, a$tx_anno, -1*a$expr_level), ]
+a_out <- a[,c('V1', 'V2', 'V3', 'V4', 'tx_anno', 'V6', 'V5')]
+write.table(a_out, 'output/atac_rnacats_full.bed', row.names=F, col.names=F, quote=F, sep='\t')
+
+a2 <- subset(a_out, V5 == 'active.enh.like.dist' | V5 == 'active.prom.like.dist')
+b <- subset(a_out, V5 == 'active.prom.like.prom' & tx_anno != 'non')
+b <- b[sort(sample(nrow(b), 1000)), ]
+write.table(rbind(a2, b), 'output/atac_rnacats_abbrev.bed', row.names=F, col.names=F, quote=F, sep='\t')
+
+a3 <- subset(a_out, V5 == 'active.prom.like.dist' & tx_anno != 'non')
+write.table(a3, 'output/atac_rnacats_k4me2_enh_only.bed', row.names=F, col.names=F, quote=F, sep='\t')
+
+
+## After filtering likely gene promoters,
+## final curated K4me2+ and K4me2- active enhancer groups moving forward
+## 681 K4me2+, 3268 typical
+
+non_tss_dist <- subset(a, category == 'dist' & !grepl('tss', tx_anno))
+non_tss_dist$enh_cat <- ifelse(grepl('prom.like', non_tss_dist$V5), 'k4me2_enh', 'typ_enh')
+
+
+write.table(non_tss_dist[,c('V1', 'V2', 'V3', 'V4', 'gene', 'V6', 'enh_cat')], 'output/enh_groups_final.bed', row.names=F, col.names=F, quote=F, sep='\t')
+
+
+

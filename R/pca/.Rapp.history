@@ -1,0 +1,379 @@
+head(a)
+a <- round(r0_timecourse, 2)
+head(a)
+write.table(a, '~/Desktop/vejnar19_zebrafish_mzt_timecourse.txt', sep='\t', quote=F)
+a <- subset(a, grepl('ENS', row.names(a)))
+tail(a)
+dim(a)
+write.table(a, '~/Desktop/vejnar19_zebrafish_mzt_timecourse.txt', sep='\t', quote=F)
+600/1e6
+4800/960
+15.44*5
+f <- read.table('~/Downloads/2025_01_31_class_project/02_all_expression_data/17_xenopus_tropicalis_ensembl_v112_expression_data.tsv', sep='\t', header=T, quote='')#
+#
+## No gene IDs -- merge from Ensembl#
+g <- read.table('~/Desktop/taxon_cdd/xtrop_ens_cdd.txt', sep='\t', header=T, quote='')
+names(f)
+names(g)
+a <- merge(g[,c(1,3,4)], f, by.x=3, by.y=1)
+dim(a)
+dim(f)
+g2 <- unique(g[,c(1,3,4)])
+dim(g2)
+dim(f)
+head(g2)
+tail(g2)
+length(unique(g2[,2]))
+length(unique(g2[,3]))
+g2[!g2[,3] %in% f[,1], ]
+f2 <- merge(g2, f, by.x=3, by.y=1)
+dim(f2)
+head(f2)
+f2 <- f2[,-1]
+names(f2)[1] <- 'GeneID'
+names(f2)[2] <- 'TranscriptID'
+head(f2)
+f2[,3:ncol(f2)] <- round(f2[,3:ncol(f2)]
+)
+head(f2)
+f <- read.table('~/Downloads/2025_01_31_class_project/02_all_expression_data/17_xenopus_tropicalis_ensembl_v112_expression_data.tsv', sep='\t', header=T, quote='')#
+#
+## No gene IDs -- merge from Ensembl#
+g <- read.table('~/Desktop/taxon_cdd/xtrop_ens_cdd.txt', sep='\t', header=T, quote='')#
+g2 <- unique(g[,c(1,3,4)])#
+f2 <- merge(g2, f, by.x=3, by.y=1)#
+f2 <- f2[,-1]#
+names(f2)[1] <- 'GeneID'#
+names(f2)[2] <- 'TranscriptID'#
+f2[,3:ncol(f2)] <- round(f2[,3:ncol(f2)], 3)
+head(f2)
+dim(f2)
+write.table(f2, '~/Desktop/taxon_rnaseq/xtropicalis_rnaseq.txt', sep='\t', quote=F, row.names=F)
+sum(g[,1] %in% f2[,1])
+length(unique(g$CDD.ID))
+max(data.frame((t(table(unique(g[,3])))))[,3])
+head(g)
+head(sort(g$CDD.ID), 100)
+head(sort(unique(g$CDD.ID)), 100)
+sum(g$CDD.ID != "")
+length(unique(g$CDD.ID))
+dim(g)
+write.table(f2, '~/Desktop/taxon_rnaseq/xtropicalis_rnaseq.txt', sep='\t', quote=F, row.names=F)
+head(f2)
+dim(f2)
+f <- read.table('~/Downloads/2025_01_31_class_project/02_all_expression_data/31_caenorhabditis_elegans_ensembl_v58_expression_data.tsv', sep='\t', header=T, quote='')#
+#
+# Process ID column into GeneID and TranscriptID#
+ids <- data.frame(do.call('rbind', strsplit(f[,1], '|', fixed=T)))#
+names(ids) <- c('GeneID', 'TranscriptID')#
+#
+# Put it together rounding to 3 decimal places#
+ff <- cbind(ids, round(f[,2:ncol(f)], digits=3))#
+#
+#Count unique gene IDs, transcript IDs#
+length(unique(ff$GeneID))#
+# [1] 46926#
+length(unique(ff$TranscriptID))#
+# [1] 60000#
+#
+# Check against CDD annotations#
+f <- read.table('~/Desktop/taxon_cdd/c_elegans_ens_cdd.txt', sep='\t', header=T, quote='')#
+length(unique(f$CDD.ID))#
+# [1] 3022#
+# Write out#
+write.table(ff, '~/Desktop/taxon_rnaseq/celegans_rnaseq.txt', sep='\t', quote=F, row.names=F)
+f <- read.table('~/Downloads/2025_01_31_class_project/02_all_expression_data/14_oryzias_latipes_ensembl_v110_expression_data.tsv', sep='\t', header=T, quote='')
+head(f)
+g <- read.table('~/Desktop/taxon_cdd/medaka_ens_cdd.txt', sep='\t', header=T, quote='')#
+g2 <- unique(g[,c(1,3,4)])#
+f2 <- merge(g2, f, by.x=3, by.y=1)#
+f2 <- f2[,-1]#
+names(f2)[1] <- 'GeneID'#
+names(f2)[2] <- 'TranscriptID'#
+f2[,3:ncol(f2)] <- round(f2[,3:ncol(f2)], 3)
+head(f2)
+dim(f2)
+dim(f)
+# Check against CDD annotations#
+sum(g[,1] %in% f2[,1])#
+# [1] 62078#
+length(unique(g$CDD.ID))#
+# [1] 7100
+write.table(f2, '~/Desktop/taxon_rnaseq/medaka_rnaseq.txt', sep='\t', quote=F, row.names=F)
+f <- read.table('~/Downloads/2025_01_31_class_project/02_all_expression_data/28_strongylocentrotus_purpuratus_ensembl_v58_expression_data.tsv', sep='\t', header=T, quote='')
+head(f)
+head(f, 100)
+head(name(f), 100)
+head(names(f), 100)
+head(f[,1], 100)
+tail(f[,1], 100)
+head(f[,1], 100)
+ids <- data.frame(do.call('rbind', strsplit(f[,1], '|', fixed=T)))#
+names(ids) <- c('GeneID', 'TranscriptID')#
+#
+# Put it together rounding to 3 decimal places#
+ff <- cbind(ids, round(f[,2:ncol(f)], digits=3))#
+#
+#Count unique gene IDs, transcript IDs#
+length(unique(ff$GeneID))#
+# [1] 46926#
+length(unique(ff$TranscriptID))#
+# [1] 60000
+f <- read.table('~/Desktop/taxon_cdd/spurp_ens_cdd.txt', sep='\t', header=T, quote='')#
+sum(f[,1] %in% ff[,1])
+length(unique(f$CDD.ID))
+head(ff)
+a <- ff[grepl(ff$GeneID, "GeneID"), ]
+a <- ff[grepl("GeneID", ff$GeneID), ]
+head(a)
+dim(a)
+tail(a)
+tail(a, 100)
+head(a)
+a <- ff[grepl("_t1", ff$TranscriptID), ]
+dim(a)
+tail(a)
+head(a)
+grep("XM", a[,2])
+sum(grepl("XM", a[,2]))
+sum(grepl("_t1", a[,2]))
+sum(grepl("NM", a[,2]))
+sum(grepl("NR", a[,2]))
+tail(a)
+ff <- ff[!grepl("_t1", ff$TranscriptID), ]
+dim(ff)
+head(ff)
+#Count unique gene IDs, transcript IDs#
+length(unique(ff$GeneID))#
+# [1] 33528#
+length(unique(ff$TranscriptID))#
+# [1] 45798
+ff[ff[,2] == 'GeneID_575213M_001009577',]
+f <- read.table('~/Downloads/2025_01_31_class_project/02_all_expression_data/28_strongylocentrotus_purpuratus_ensembl_v58_expression_data.tsv', sep='\t', header=T, quote='')#
+#
+#Some of the IDs are unfamiliar...#
+#
+# Process ID column into GeneID and TranscriptID#
+ids <- data.frame(do.call('rbind', strsplit(f[,1], '|', fixed=T)))#
+names(ids) <- c('GeneID', 'TranscriptID')#
+#
+# Put it together rounding to 3 decimal places#
+ff <- cbind(ids, round(f[,2:ncol(f)], digits=3))#
+#
+# Include only transcript IDs that are present in the Ensembl CDD file#
+g <- read.table('~/Desktop/taxon_cdd/spurp_ens_cdd.txt', sep='\t', header=T, quote='')
+ff <- ff[ff$TranscriptID %in% f[,2], ]
+dim(ff)
+head(g)
+f <- read.table('~/Downloads/2025_01_31_class_project/02_all_expression_data/28_strongylocentrotus_purpuratus_ensembl_v58_expression_data.tsv', sep='\t', header=T, quote='')#
+#
+#Some of the IDs are unfamiliar...#
+#
+# Process ID column into GeneID and TranscriptID#
+ids <- data.frame(do.call('rbind', strsplit(f[,1], '|', fixed=T)))#
+names(ids) <- c('GeneID', 'TranscriptID')#
+#
+# Put it together rounding to 3 decimal places#
+ff <- cbind(ids, round(f[,2:ncol(f)], digits=3))#
+#
+# Include only transcript IDs that are present in the Ensembl CDD file#
+g <- read.table('~/Desktop/taxon_cdd/spurp_ens_cdd.txt', sep='\t', header=T, quote='')
+ff <- ff[ff$TranscriptID %in% g[,2], ]
+dim(ff)
+#Count unique gene IDs, transcript IDs#
+length(unique(ff$GeneID))#
+# [1] 33528#
+length(unique(ff$TranscriptID))#
+# [1] 45798
+sum(g[,1] %in% ff[,1])#
+# [1] 45245#
+length(unique(g$CDD.ID))#
+# [1] 4198
+write.table(ff, '~/Desktop/taxon_rnaseq/spurp_rnaseq.txt', sep='\t', quote=F, row.names=F)
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', header=T)
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', header=T, sep='\t')
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', header=T, sep='\t', quote='')
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', header=F, sep='\t', quote='')
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', header=F, sep='\t', quote='F')
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', header=F, sep='\t', quote='"')
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', header=F, sep='\t', quote='')
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', header=F, sep='\t', quote='', comment='')
+head(f)
+g <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/family_superfamily_links.txt')
+head(g)
+a <- merge(f, g, by.x=2, by.y=3)
+dim(a)
+head(a)
+a <- merge(f[,1:5], g, by.x=2, by.y=3)
+head(a_)
+head(a)
+head(f)
+head(g)
+tail(g)
+head(a)
+tail(a)
+dim(a)
+head(a, 100)
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt')
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', sep='\t')
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', sep='\t', quote='')
+f <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/fileX.txt', sep='\t', quote='', comment='')
+head(f)
+head(g)
+a <- merge(f, g, by.x=2, by.y=3)
+dim(a)
+head(a)
+a <- merge(f[,1:3], g, by.x=2, by.y=3)
+dim(a)
+head(a)
+tail(a)
+ens <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/ens_zf_cdd.txt', sep='\t')
+head(ens)
+ens <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/ens_zf_cdd.txt', sep='\t', header=T)
+head(ens)
+aa <- merge(ens, a, by.x=2, by.y=1)
+dim(aa)
+dim(ens)
+head(ens)
+head(aa)
+aa <- merge(ens, a, by.x=4, by.y=1)
+dim(ens)
+dim(a)
+aa <- merge(ens, a, by.x=2, by.y=4)
+dim(aa)
+head(aa)
+tail(aa)
+zf <- read.table('~/Dropbox/Work/Teaching/BIOSC 1640/2254/Project/project example/vejnar19_zebrafish_mzt_timecourse.txt', sep='\t', header=T)
+head(zf)
+zfa <- merge(zf, aa, by.x=1, by.y=1)
+dim(zfa)
+zfa <- merge(zf, aa, by.x=1, by.y=2)
+dim(zfa)
+zfa <- merge(zf, aa, by.x=1, by.y=2, all.x=T)
+dim(zfa)
+dim(zf)
+head(zf)
+head(zfa)
+zfa <- merge(zf, aa, by.x=1, by.y=2)
+dim(zfa)
+head(zfa)
+dim(zfa)
+length(unique(zfa[,1])
+)
+?aggregate
+dd <- aggregate(zfa[,2:9,11,12], by=c(11,12), FUN=sum)
+dd <- aggregate(zfa[,c(2:9,11,12)], by=c(11,12), FUN=sum)
+dd <- aggregate(zfa[,c(2:9,11,12)], by=list(11,12), FUN=sum)
+dd <- aggregate(zfa[,c(2:9,11)], by=list(11), FUN=sum)
+head(zfa[,c(2:9,11)])
+dd <- aggregate( . ~ V2, zfa[,c(2:9,11)], sum)
+head(dd)
+dim(dd)
+tail(dd)
+plot(dd[,1], dd[,8])
+plot(dd[,2], dd[,8])
+plot(log2(1+dd[,2]), log2(1+dd[,8]))
+nums <- c(5,6,4,7,3)
+scale(nums)
+?scale
+nums <- c(500, 600, 400, 700, 300)
+scale(nums)
+nums <- c(5,6,4,4,5)
+scale(nums)
+nums2 <- c(50, 60, 25, 25, 50)
+scale(nums2)
+nums <- c(5,6,5,5,5)
+scale(nums)
+nums <- c(100, 105, 103, 100, 100)
+scale(nums)
+nums2 <- c(100, 200, 50, 100, 100)
+nums <- c(100,101,99,100,100)
+scale(nums)
+scale(nums2)
+nums <- c(100,105,95,100,100)
+scale(numes)
+scale(nums)
+nums2 <- c(100,200,75,100,100)
+scale(nums2)
+nums2 <- c(100,200,25,100,100)
+scale(nums2)
+nums2 <- c(100,200,10,100,100)
+scale(nums2)
+nums2 <- c(100,101,99,100,100)
+scale(nums2)
+nums <- c(100,101,99,100,100)
+nums2 <- c(100,200,0,100,100)
+scale(nums)
+scale(nums2)
+nums
+nums2
+scale(nums)
+scale(nums2)
+32/24
+24/32
+.75*40
+250*8
+37*.25
+14*.25
+42500/12
+3542*1.5
+5313*2
+2933
+2933*2
+41200/12
+10*12
+120*4
+6212/2
+2^0.3
+295/360
+bluered
+require(gplots)
+bluered
+bluered(10)
+plot(1:10, bluered(10), cex=5, pch=19)
+plot(1:10, 1:10, bluered(10), cex=5, pch=19)
+plot(1:10, 1:10, col=bluered(10), cex=5, pch=19)
+23/5.75
+## ATAC-seq open regions from Palfy and Liu, C&R coverage (analysis2/pca_cov)#
+data <- read.table("data/atac_open_coverage.txt", header=TRUE)#
+names(data) <- tolower(names(data))#
+#
+## Center, Left, right regions#
+left_data <- data[,grepl("_left", names(data))]#
+right_data <- data[,grepl("_right", names(data))]#
+#
+## Swap left/right so that right summed cov is > left#
+## Only considering non Igg samples#
+non_igg_right <- right_data[,!grepl('igg', names(right_data))]#
+non_igg_left <- left_data[,!grepl('igg', names(left_data))]#
+#
+orientation <- rowSums(non_igg_right) - rowSums(non_igg_left)#
+#
+inferred_plus_strand <- subset(data, orientation >= 0)#
+new_names1 <- gsub("_left", "_up", names(data))#
+new_names1 <- gsub("_right", "_down", new_names1)#
+names(inferred_plus_strand) <- new_names1#
+inferred_plus_strand$inferred_strand <- "+"#
+#
+inferred_minus_strand <- subset(data, orientation < 0)#
+new_names2 <- gsub("_left", "_down", names(data))#
+new_names2 <- gsub("_right", "_up", new_names2)#
+names(inferred_minus_strand) <- new_names2#
+#
+## swap the columns#
+inferred_minus_strand <- inferred_minus_strand[,new_names1]#
+inferred_minus_strand$inferred_strand <- "-"#
+#
+data2 <- rbind(inferred_plus_strand, inferred_minus_strand)#
+## Normalize center coverage to 500bp (center = atac peak, so variable length)#
+center_data <- data2[,grepl("_center", names(data2))]#
+atac_open_lengths <- data2$end - data2$start#
+center_data <- round(500 * center_data / atac_open_lengths, 3)#
+#
+up_data <- data2[,grepl("_up", names(data2))]#
+down_data <- data2[,grepl("_down", names(data2))]#
+#
+data3 <- cbind(data2[,1:7], data2[,'inferred_strand', drop=F], center_data, up_data, down_data)#
+#
+write.table(data3, 'output/atac_open_coverage_reshaped.txt', row.names=F, quote=F, sep='\t')
+source('~/Dropbox/Projects/crhist/github/R/pca/pca_timecourse.R.txt')

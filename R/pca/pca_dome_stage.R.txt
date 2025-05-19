@@ -1,0 +1,760 @@
+### Hurton et al, PLoS Biology 2025
+###
+### PCA on dome histone mods over atac accessible regions, left+right flanks
+### pcr dedup1 for pooled replicates
+### Atac regions have been annotated as TSS overlapping, proximal, and distal enh
+###
+### Running everything will yield various data files and figures in the 'output'
+### directory. Some of the files are just for reference, some feed into
+### other analyses
+###
+### File dependencies
+###		data/atac_open_coverage.txt
+###		data/sample_totals.txt
+
+## Set to TRUE to get some extra output files (~140 MB total)
+WRITE_ALL_OUTPUT <- FALSE
+
+
+library(gplots)
+library(e1071)
+library(MASS)
+
+#############
+# 1. Initial data prep
+#############
+
+## ATAC-seq open regions from Palfy and Liu, C&R coverage (analysis2/pca_cov)
+data <- read.table("data/atac_open_coverage.txt", header=TRUE)
+names(data) <- tolower(names(data))
+
+## Center, Left, right regions
+left_data <- data[,grepl("_left", names(data))]
+right_data <- data[,grepl("_right", names(data))]
+
+## Swap left/right so that right summed cov is > left
+## Only considering non Igg samples
+non_igg_right <- right_data[,!grepl('igg', names(right_data))]
+non_igg_left <- left_data[,!grepl('igg', names(left_data))]
+
+orientation <- rowSums(non_igg_right) - rowSums(non_igg_left)
+
+inferred_plus_strand <- subset(data, orientation >= 0)
+new_names1 <- gsub("_left", "_up", names(data))
+new_names1 <- gsub("_right", "_down", new_names1)
+names(inferred_plus_strand) <- new_names1
+inferred_plus_strand$inferred_strand <- "+"
+
+inferred_minus_strand <- subset(data, orientation < 0)
+new_names2 <- gsub("_left", "_down", names(data))
+new_names2 <- gsub("_right", "_up", new_names2)
+names(inferred_minus_strand) <- new_names2
+
+## swap the columns
+inferred_minus_strand <- inferred_minus_strand[,new_names1]
+inferred_minus_strand$inferred_strand <- "-"
+
+data2 <- rbind(inferred_plus_strand, inferred_minus_strand)
+
+
+## Normalize center coverage to 500bp (center = atac peak, so variable length)
+center_data <- data2[,grepl("_center", names(data2))]
+atac_open_lengths <- data2$end - data2$start
+center_data <- round(500 * center_data / atac_open_lengths, 3)
+
+up_data <- data2[,grepl("_up", names(data2))]
+down_data <- data2[,grepl("_down", names(data2))]
+
+data3 <- cbind(data2[,1:7], data2[,'inferred_strand', drop=F], center_data, up_data, down_data)
+
+write.table(data3, 'output/atac_open_coverage_reshaped.txt', row.names=F, quote=F, sep='\t')
+
+
+#############
+# 2. Data prep for pooled samples (Fig 1D)
+#############
+
+## Reconstruct the data table with pooled replicates
+## Normalize to log2 RPKM, smoothing factor 1
+## For Igg, pool igg and igg_dmso (rename igg_dmso_1 and igg_dmso_2 to igg_d1 and igg_d2)
+
+names(data3) <- gsub('igg_dmso_', 'igg_d', names(data3))
+names(center_data) <- gsub('igg_dmso_', 'igg_d', names(center_data))
+
+norm_factors <- read.table('data/sample_totals.txt', header=T)
+
+## Adjust the names to match current analysis
+norm_factors$Sample_Name <- tolower(norm_factors$Sample_Name)
+norm_factors$Sample_Name <- gsub('igg_dmso_', 'igg_d', norm_factors$Sample_Name)
+norm_factors <- subset(norm_factors, Sample_Name %in% gsub("_center", "", names(data3)), select = c('Sample_Name', 'PCR_Dedup_1'))
+
+## Pool norm factors across replicates
+norm_factors_unpooled <- norm_factors
+norm_factors$Sample_Name <- gsub("_..?$", "", norm_factors$Sample_Name, perl=T)
+norm_factors <- aggregate(PCR_Dedup_1 ~ Sample_Name, norm_factors, FUN = "sum")
+
+SMOOTH <- 1
+marks <- unique(gsub("_..?_center", "", names(center_data), perl=T))
+pooled <- data3[,'name', drop=F]
+for (mark in marks) {
+	data_subset <- data3[,grepl(mark, names(data3))]
+	norm <- 2 * 1e6 / norm_factors[norm_factors$Sample_Name == mark,'PCR_Dedup_1']
+		
+	for (region in c('up', 'center', 'down')) {
+		if (ncol(data_subset) > 3) {
+			pooled[,paste0(mark, '_', region)] <- log2(norm * rowSums(data_subset[,grepl(region, names(data_subset))]) + SMOOTH)
+		}
+		else {
+			pooled[,paste0(mark, '_', region)] <- log2(norm * data_subset[,grepl(region, names(data_subset))] + SMOOTH)
+		}
+	}
+}
+
+
+#############
+# 3. PCA on pooled samples
+#############
+
+## do not include igg
+
+pooled_with_igg <- pooled
+pooled <- pooled[,!grepl('igg', names(pooled))]
+
+input_matrix <- as.matrix(pooled[,2:ncol(pooled)])
+row.names(input_matrix) <- pooled$name
+
+pca <- prcomp(input_matrix, center=T, scale.=T)
+
+## Write out raw data files
+if (WRITE_ALL_OUTPUT) {
+	write.table(input_matrix, 'output/POOLED_pca_input_matrix.txt', sep='\t', quote=F)
+	write.table(pca$x, 'output/POOLED_pca_rotated_data.txt', sep='\t', quote=F)
+	write.table(pca$rot, 'output/POOLED_pca_loadings.txt', sep='\t', quote=F)
+}
+
+data_pca_rot <- cbind(data3[,1:8], pca$x)
+
+## Plot rotated data labeled by promoter, enhancer
+## Exclude UMMS/Refpred promoters and TSS proximal enhancers (ambiguous) from the main plots
+## Exclude elements that have 0 coverage for all marks
+
+data_pca_rot_sub <- subset(data_pca_rot, category %in% c('dist', 'prom_cage', 'prom_ens') & rowSums(input_matrix[,2:ncol(input_matrix)]) > 0)
+
+data_pca_rot_sub$bg[data_pca_rot_sub$category=="dist"]="#0072B222"
+data_pca_rot_sub$bg[data_pca_rot_sub$category %in% c("prom_cage", "prom_ens")]="#D55E0022"
+
+data_pca_rot_sub$color[data_pca_rot_sub$category=="dist"]="#0072B233"
+data_pca_rot_sub$color[data_pca_rot_sub$category %in% c("prom_cage", "prom_ens")]="#D55E0033"
+
+
+## PC 1 & 2 biplot
+pdf("output/pca_biplot_pc1-2.pdf",10,5)
+
+XLIMS=c(-10,27)
+YLIMS=c(-7,6)
+
+with(data_pca_rot_sub, plot(PC1, PC2, cex=1, main="PCA Dome Samples", xlab="PC1", ylab="PC2", col=bg, pch=20, xlim=XLIMS, ylim=YLIMS))
+
+dev.off()
+
+## Later PCs biplots
+pdf('output/pca_biplots_later_pcs.pdf', 10, 10)
+par(pty='s')
+with(data_pca_rot_sub, plot(PC3, PC4, cex=1, main="PCA Dome Samples", xlab="PC3 (5%)", ylab="PC4 (5%)", col=bg, pch=20))
+
+with(data_pca_rot_sub, plot(PC5, PC6, cex=1, main="PCA Dome Samples", xlab="PC5 (4%)", ylab="PC6 (3%)", col=bg, pch=20))
+dev.off()
+
+## Heatmap of loadings
+pdf('output/pca_loadings_heatmap.pdf', 6, 6)
+par(oma=c(3,3,3,3))
+heatmap.2(pca$rot, Rowv=F, Colv=F, dendrogram='none', symbreaks=T, col=bluered(20), trace='none', cexRow=0.25, cexCol=0.25, density.info='none')
+dev.off()
+
+
+
+#############
+# 4. Data prep for unpooled samples (Fig S1A-C)
+#############
+
+## Normalized to log2 RPKM, smoothing factor 1
+## Rename samples to facilitate sorting (_1, _2, etc at the end)
+
+markreps <- unique(gsub("_center", "", names(center_data), perl=T))
+unpooled <- data3[,'name', drop=F]
+used_marks <- c() ## Running list of marks already seen
+
+for (mark in markreps) {
+	prefix <- gsub("_[0-9d]+$", "", mark, perl=T)
+	used_marks <- c(used_marks, prefix)
+	used_count <- sum(used_marks == prefix)
+	
+	data_subset <- data3[,grepl(mark, names(data3))]
+	norm <- 2 * 1e6 / norm_factors_unpooled[norm_factors_unpooled$Sample_Name == mark,'PCR_Dedup_1']
+		
+	for (region in c('up', 'center', 'down')) {
+		unpooled[,paste0(prefix, '_', region, '_', used_count)] <- log2(norm * data_subset[,grepl(region, names(data_subset))] + SMOOTH)
+	}
+}
+
+## Reorder columns
+mark_order <- c('name')
+for (mark in unique(used_marks)) {
+	mark_count <- sum(used_marks == mark)
+	for (region in c('up', 'center', 'down')) {
+		for (i in 1:mark_count) {
+			mark_order <- c(mark_order, paste0(mark, '_', region, '_', i))		
+		}
+	}
+}
+
+unpooled <- unpooled[,mark_order]
+
+
+#############
+# 5. PCA on unpooled samples
+#############
+
+## do not include igg samples
+
+unpooled <- unpooled[,!grepl('igg', names(unpooled))]
+
+input_matrix <- as.matrix(unpooled[,2:ncol(unpooled)])
+row.names(input_matrix) <- unpooled$name
+
+UNPOOLED_pca <- prcomp(input_matrix, center=T, scale.=T)
+
+## Write out raw data files
+if (WRITE_ALL_OUTPUT) {
+	write.table(input_matrix, 'output/UNPOOLED_pca_input_matrix.txt', sep='\t', quote=F)
+	write.table(UNPOOLED_pca$x, 'output/UNPOOLED_pca_rotated_data.txt', sep='\t', quote=F)
+	write.table(UNPOOLED_pca$rot, 'output/UNPOOLED_pca_loadings.txt', sep='\t', quote=F)
+}
+
+UNPOOLED_data_pca_rot <- cbind(data3[,1:8], UNPOOLED_pca$x)
+
+## Plot rotated data labeled by promoter, enhancer
+## Include all elements this time that have > 0 coverage for at least one sample
+## However, collapse promoters (Ens/Refpred/UMMS) into one category
+## Three categories are Distal element (dist), Promoter element (prom),
+## Promoter-proximal element (prox)
+
+UNPOOLED_data_pca_rot_sub <- subset(UNPOOLED_data_pca_rot, rowSums(input_matrix[,2:ncol(input_matrix)]) > 0)
+
+UNPOOLED_data_pca_rot_sub$bg[UNPOOLED_data_pca_rot_sub$category=="dist"]="#0072B222"
+UNPOOLED_data_pca_rot_sub$bg[UNPOOLED_data_pca_rot_sub$category=="prox"]="#00CC6622"  #green
+UNPOOLED_data_pca_rot_sub$bg[UNPOOLED_data_pca_rot_sub$category %in% c("prom_cage", "prom_ens", "prom_umms", "prom_refpred")]="#D55E0022"
+
+UNPOOLED_data_pca_rot_sub$color[UNPOOLED_data_pca_rot_sub$category=="dist"]="#0072B233"
+UNPOOLED_data_pca_rot_sub$color[UNPOOLED_data_pca_rot_sub$category=="prox"]="#00CC6633"  #green
+UNPOOLED_data_pca_rot_sub$color[UNPOOLED_data_pca_rot_sub$category %in% c("prom_cage", "prom_ens", "prom_umms", "prom_refpred")]="#D55E0033"
+
+UNPOOLED_data_pca_rot_sub$pch[UNPOOLED_data_pca_rot_sub$category=="dist"]=20
+UNPOOLED_data_pca_rot_sub$pch[UNPOOLED_data_pca_rot_sub$category=="prox"]=18  #green
+UNPOOLED_data_pca_rot_sub$pch[UNPOOLED_data_pca_rot_sub$category %in% c("prom_cage", "prom_ens", "prom_umms", "prom_refpred")]=17
+
+
+pdf("output/UNPOOLED_pca_biplot_pc1_vs_2.pdf",10,5)
+XLIMS=c(-10,40)
+YLIMS=c(-7,7)
+
+with(UNPOOLED_data_pca_rot_sub, plot(PC1, PC2, cex=1, main="PCA Dome Samples unpooled", xlab="PC1", ylab="PC2", col=bg, pch=pch, xlim=XLIMS, ylim=YLIMS))
+
+with(subset(UNPOOLED_data_pca_rot_sub, category=='dist'), plot(PC1, PC2, cex=1, main="Distal", xlab="PC1", ylab="PC2", col=bg, pch=pch, xlim=XLIMS, ylim=YLIMS))
+
+with(subset(UNPOOLED_data_pca_rot_sub, category %in% c('prom_cage','prom_ens', 'prom_umms', 'prom_refpred')), plot(PC1, PC2, cex=1, main="Promoter", xlab="PC1", ylab="PC2", col=bg, pch=pch, xlim=XLIMS, ylim=YLIMS))
+
+with(subset(UNPOOLED_data_pca_rot_sub, category=='prox'), plot(PC1, PC2, cex=1, main="Prox", xlab="PC1", ylab="PC2", col=bg, pch=pch, xlim=XLIMS, ylim=YLIMS))
+
+dev.off()
+
+
+pdf("output/UNPOOLED_pca_biplot_1vs_3.pdf",10,5)
+
+XLIMS=c(-10,40)
+YLIMS=c(-7,13)
+
+with(UNPOOLED_data_pca_rot_sub, plot(PC1, PC3, cex=1, main="PCA Dome Samples unpooled", xlab="PC1", ylab="PC3", col=bg, pch=pch, xlim=XLIMS, ylim=YLIMS))
+
+with(subset(UNPOOLED_data_pca_rot_sub, category=='dist'), plot(PC1, -PC3, cex=1, main="Distal", xlab="PC1", ylab="PC3", col=bg, pch=pch, xlim=XLIMS, ylim=YLIMS))
+
+with(subset(UNPOOLED_data_pca_rot_sub, category %in% c('prom_cage','prom_ens', 'prom_umms', 'prom_refpred')), plot(PC1, PC3, cex=1, main="Promoter", xlab="PC1", ylab="PC3", col=bg, pch=pch, xlim=XLIMS, ylim=YLIMS))
+
+with(subset(UNPOOLED_data_pca_rot_sub, category=='prox'), plot(PC1, PC3, cex=1, main="Prox", xlab="PC1", ylab="PC3", col=bg, pch=pch, xlim=XLIMS, ylim=YLIMS))
+
+dev.off()
+
+
+## Heatmap of loadings for PC1-3
+
+rot_matrix <- UNPOOLED_pca$rot
+
+pdf('output/UNPOOLED_pca_loadings_heatmap.pdf', 5, 10)
+par(oma=c(3,3,3,3))
+heatmap.2(UNPOOLED_pca$rot[,1:3], Rowv=F, Colv=F, dendrogram='none', symbreaks=T, col=bluered(20), 
+breaks = c(-10:10)*0.03,
+trace='none', cexRow=0.25, cexCol=0.25, density.info='none')
+dev.off()
+
+
+
+#############
+# 6. SVM on pooled pca
+#############
+
+## Use SVM classifier to identify outlier enhancers and promoters
+## Considering only distal enhancers and CAGE/Ensembl promoters
+
+# SVM: broad categories to capture the different classes
+
+# Radial kernel classification for selected PCs
+# Default gamma and cost are 0.25 and 1
+
+data_pca_rot_sub$label <- factor(ifelse(data_pca_rot_sub$category=='dist', 'enh', 'prom'))
+pcs <- c('PC1', 'PC2', 'PC3')
+
+pca_svm <- svm(label ~ ., data = data_pca_rot_sub[,c('label', pcs)], gamma=1, cost = 1)
+
+predictions <- predict(pca_svm, data_pca_rot_sub[,pcs])
+table(data_pca_rot_sub$label, predictions)
+
+# Gamma = 1, cost = 1
+#      predictions
+#         enh  prom
+#  enh  25138  964
+#  prom  2062  5853
+
+
+## Predict on entire dataset
+data_pca_rot$svm_prediction <- predict(pca_svm, data_pca_rot[,pcs])
+table(data_pca_rot[,c('category', 'svm_prediction')])
+
+#              svm_prediction
+#category         enh  prom
+#  dist         25199   964
+#  prom_cage      694  3750
+#  prom_ens      1370  2103
+#  prom_refpred   226   286
+#  prom_umms      805  1059
+#  prox          7485  4391
+
+
+if (WRITE_ALL_OUTPUT) {
+	write.table(data_pca_rot, "output/atac_open_pca_rot.txt", sep="\t", quote=FALSE, row.names=F)
+}
+####data_pca_rot <- read.table("output/atac_open_pca_rot.txt", sep="\t", header=T)
+
+
+## For visualization, 2d density kernel estimation on PC1 and PC2
+## CAGE promoters only (i.e., need evidence for tx)
+
+promoter_subset <- subset(data_pca_rot, category == 'prom_cage', select = c('PC1', 'PC2'))
+pdens <- kde2d(promoter_subset$PC1, promoter_subset$PC2, h=3, n=125)
+
+enhancer_subset <- subset(data_pca_rot, category == 'dist', select = c('PC1', 'PC2'))
+edens <- kde2d(enhancer_subset$PC1, enhancer_subset$PC2, h=3, n=125)
+
+pdf('output/countour_plot_predictions.pdf', 9, 6)
+par(mfrow=c(2,2))
+
+ecolor="#0072B299"
+pcolor="#D55E0099"
+
+data_pca_rot1 <- subset(data_pca_rot, rowSums(input_matrix[,2:ncol(input_matrix)]) > 0)
+
+with(subset(data_pca_rot1, category %in% c('prom_cage') & svm_prediction == 'prom'), plot(PC1, PC2, col=pcolor, cex=0.25,main="PC1 vs PC2 Canonical promoter",xlab="PC1", ylab="PC2", pch=20, xlim=XLIMS, ylim=YLIMS))
+contour(pdens, add=T, col='red', drawlabels=FALSE, nlevels=4)
+contour(edens, add=T, col='blue', drawlabels=FALSE, nlevels=4)
+
+with(subset(data_pca_rot1, category %in% c('prom_cage') & svm_prediction == 'enh'), plot(PC1, PC2, col=pcolor, cex=0.25,main="PC1 vs PC2 Enhancer-like promoter",xlab="PC1", ylab="PC2", pch=20, xlim=XLIMS, ylim=YLIMS))
+contour(pdens, add=T, col='red', drawlabels=FALSE, nlevels=4)
+contour(edens, add=T, col='blue', drawlabels=FALSE, nlevels=4)
+
+with(subset(data_pca_rot1, category == 'dist' & svm_prediction == 'enh'), plot(PC1, PC2, col=ecolor, cex=0.25,main="PC1 vs PC2 Canonical enhancer",xlab="PC1", ylab="PC2", pch=20, xlim=XLIMS, ylim=YLIMS))
+contour(pdens, add=T, col='red', drawlabels=FALSE, nlevels=4)
+contour(edens, add=T, col='blue', drawlabels=FALSE, nlevels=4)
+
+with(subset(data_pca_rot1, category == 'dist' & svm_prediction == 'prom'), plot(PC1, PC2, col=ecolor, cex=0.25,main="PC1 vs PC2 Promoter-like enhancer",xlab="PC1", ylab="PC2", pch=20, xlim=XLIMS, ylim=YLIMS))
+contour(pdens, add=T, col='red', drawlabels=FALSE, nlevels=4)
+contour(edens, add=T, col='blue', drawlabels=FALSE, nlevels=4)
+
+dev.off()
+
+
+#############
+# 7. Prepare for future analysis on individual histone marks
+#############
+
+## Most of the informative signal is central + downstream, so
+## recalculate log2 RPKM for center+down: exponentiate, undo smoothing,
+## weighted average according to atac region size, resmooth, log2
+
+data4 <- cbind(data3[,1:8], data_pca_rot[,'svm_prediction', drop=F], pooled_with_igg[,2:ncol(pooled_with_igg)])
+
+for (sample in c('k4me1', 'k4me2', 'k4me3', 'k9ac', 'k27ac', 'h4k16ac', 'k56ac', 'k64ac', 'k122ac', 'ntac', 'igg')) {
+
+	center_name <- paste0('dome_', sample, '_center')
+	center_rpkm <- 2^(data4[,center_name])-1
+
+	down_name <- paste0('dome_', sample, '_down')
+	down_rpkm <- 2^(data4[,down_name])-1
+
+	region_len <- data4$end-data4$start	
+
+	center_down_name <- paste0('dome_', sample, '_centerdown')
+	center_down_rpkm <- center_rpkm * (region_len / (region_len + 1000)) + down_rpkm * (1000 / (region_len + 1000))
+	data4[,center_down_name] <- log2(center_down_rpkm + 1)
+}
+
+## Calculate log2 enrichment over igg based on center_down_rpkm
+for (sample in c('k4me1', 'k4me2', 'k4me3', 'k9ac', 'k27ac', 'h4k16ac', 'k56ac', 'k64ac', 'k122ac', 'ntac')) {
+	center_down_name <- paste0('dome_', sample, '_centerdown')
+	igg_name <- 'dome_igg_centerdown'
+	
+	enrich_name <- paste0('dome_', sample, '_lg_enrich')
+	data4[,enrich_name] <- data4[,center_down_name] - data4[,igg_name]
+}
+
+write.table(data4, 'output/atac_open_predictions.txt', row.names=F, quote=F, sep='\t')
+#####data4 <- read.table('output/atac_open_predictions.txt', header=T, sep='\t')
+
+
+#############
+# 8. K56ac and K122ac focus (Fig S2C-D)
+#############
+
+# Investigate PC4, which loads heavily on K56ac; and K122ac enhancers
+
+## PC4 upper/lower (1 SD)
+## Write BED file annotating enh and prom (exclude prox)
+
+pc4_up <- subset(data_pca_rot, PC4 > sd(PC4))
+pc4_down <- subset(data_pca_rot, PC4 < -sd(PC4))
+
+data4_bed <- data4[,c('chr', 'start', 'end', 'name', 'category', 'inferred_strand')]
+data4_bed <- subset(data4_bed, category != 'prox')
+data4_bed$category <- with(data4_bed, ifelse(grepl('prom', category), 'prom', 'enh')) 
+
+pc4_up_data <- data4_bed[data4_bed$name %in% pc4_up$name, ]
+pc4_up_data$PC4 <- 'PC4_up'
+pc4_down_data <- data4_bed[data4_bed$name %in% pc4_down$name, ]
+pc4_down_data$PC4 <- 'PC4_down'
+
+write.table(rbind(pc4_up_data, pc4_down_data), 'output/pc4_regions.bed', sep='\t', row.names=F, col.names=F, quote=F)
+
+
+## Identify K122ac and K4me1 enriched enhancers
+## Write a BED file of K122ac enriched, +/- K27ac
+
+k122ac_enriched <- subset(data4, dome_k122ac_lg_enrich > 1 & dome_k4me1_lg_enrich > 1 & category == 'dist') # N = 1353
+
+## K122ac enriched but K27ac depleted
+k122ac_enriched$k27ac_enrich <- with(k122ac_enriched, ifelse(dome_k27ac_lg_enrich < log2(1.25), 'K27_neg', 'K27_pos'))
+
+## K27ac but not K122ac
+k122ac_depleted <- subset(data4, dome_k122ac_lg_enrich < log2(1.25) & dome_k27ac_lg_enrich > log2(1.5) & dome_k4me1_lg_enrich > 1 & category == 'dist')
+k122ac_depleted$k27ac_enrich <- 'K27_pos_K122ac_neg'
+
+table(k122ac_enriched$k27ac_enrich) # 85 K27_neg, 1268 K27ac_pos
+k122ac_enriched <- k122ac_enriched[order(k122ac_enriched$k27ac_enrich), ]
+
+k122ac_both <- rbind(k122ac_enriched, k122ac_depleted)
+write.table(k122ac_both[,c('chr','start','end', 'name', 'category', 'inferred_strand', 'k27ac_enrich'), ], 'output/k122ac_enh.bed', sep='\t', row.names=F, col.names=F, quote=F)
+
+
+
+#############
+# 9. Boxplots of histone signal across enh/prom categories (Fig 1G)
+#############
+
+#Collapse promoter category, remove prox
+data4a <- subset(data4, category != 'prox')
+data4a$category <- factor(gsub('_.*', '', data4a$category, perl=T), levels = c('prom','dist'))
+
+#Convert to single factor categories
+data4a$unified_cat <- factor(with(data4a, paste0(svm_prediction, '.like.', category)), levels = c('enh.like.dist', 'prom.like.dist', 'prom.like.prom', 'enh.like.prom'))
+
+
+## Most categories are enriched in K4me1, except canonical enhancers have a mix
+table(subset(data4a, dome_k4me1_lg_enrich >= 1)$unified_cat)
+
+#  enh.like.dist prom.like.dist prom.like.prom  enh.like.prom 
+#          9653            918           6715           2344
+
+table(subset(data4a, dome_k4me1_lg_enrich < 1)$unified_cat)
+# enh.like.dist prom.like.dist prom.like.prom  enh.like.prom 
+#          15546             46            483            751 
+
+# Proportions: 0.383, 0.952, 0.933, 0.757
+
+
+## Conditioning on 2-fold enrichment of K4me1 and 10 RPKM:
+## Plot distribution boxplots for each mark
+
+data4b <- subset(data4a, dome_k4me1_lg_enrich >= 1 & dome_k4me1_centerdown >= log2(10))
+table(data4b$unified_cat)
+
+# enh.like.dist prom.like.dist prom.like.prom  enh.like.prom 
+#         4128            644           4707           1224 
+
+
+pdf('output/histone_centerdown_boxplots.pdf', 5, 5)
+par(las=2, mfrow=c(3,5), mar=c(3,2,3,1))
+boxplot(dome_k4me1_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,7), lty=1, outline=F, xlab='', ylab='', main='k4me1', staplewex=0)
+
+boxplot(dome_k4me2_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,7), lty=1, outline=F, xlab='', ylab='', main='k4me2', staplewex=0)
+
+boxplot(dome_k4me3_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,4), lty=1, outline=F, xlab='', ylab='', main='k4me3', staplewex=0)
+
+boxplot(dome_k9ac_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,5), lty=1, outline=F, xlab='', ylab='', main='k9ac', staplewex=0)
+
+boxplot(dome_k27ac_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,4), lty=1, outline=F, xlab='', ylab='', main='k27ac', staplewex=0)
+
+boxplot(dome_h4k16ac_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,4), lty=1, outline=F, xlab='', ylab='', main='h4k16ac', staplewex=0)
+
+boxplot(dome_ntac_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,4), lty=1, outline=F, xlab='', ylab='', main='ntac', staplewex=0)
+
+boxplot(dome_k56ac_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,6), lty=1, outline=F, xlab='', ylab='', main='k56ac', staplewex=0)
+
+boxplot(dome_k64ac_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,6), lty=1, outline=F, xlab='', ylab='', main='k64ac', staplewex=0)
+
+boxplot(dome_k122ac_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,4), lty=1, outline=F, xlab='', ylab='', main='k122ac', staplewex=0)
+
+boxplot(dome_igg_centerdown ~  unified_cat, data4b, cex.axis=0.5, ylim=c(0,4), lty=1, outline=F, xlab='', ylab='', main='igg', staplewex=0)
+
+dev.off()
+
+
+## Sig differences?
+kruskal.test(dome_k4me1_centerdown ~  unified_cat, data4b)$p.val  #8.880054e-13
+kruskal.test(dome_k4me2_centerdown ~  unified_cat, data4b)$p.val  #0
+kruskal.test(dome_k4me3_centerdown ~  unified_cat, data4b)$p.val  #0
+kruskal.test(dome_k9ac_centerdown ~  unified_cat, data4b)$p.val  #9.680082e-260
+kruskal.test(dome_k27ac_centerdown ~  unified_cat, data4b)$p.val  #3.168265e-154
+kruskal.test(dome_h4k16ac_centerdown ~  unified_cat, data4b)$p.val  #4.219414e-178
+kruskal.test(dome_ntac_centerdown ~  unified_cat, data4b)$p.val  #7.881285e-241
+kruskal.test(dome_k56ac_centerdown ~  unified_cat, data4b)$p.val  #6.311491e-36
+kruskal.test(dome_k64ac_centerdown ~  unified_cat, data4b)$p.val  #1.071475e-77
+kruskal.test(dome_k122ac_centerdown ~  unified_cat, data4b)$p.val  #8.735643e-75
+kruskal.test(dome_igg_centerdown ~  unified_cat, data4b)$p.val  #3.438537e-29
+
+## pairwise for k4me1
+wilcox.test(dome_k4me1_centerdown ~  unified_cat, data4b, subset= unified_cat %in% c('enh.like.dist', 'prom.like.dist'))$p.val  # 0.4513154
+
+
+## Write a BED file of these regions for Deeptools heatmaps
+a <- data4b[,c('chr', 'start', 'end', 'name', 'unified_cat', 'inferred_strand')]
+a <- a[order(a$unified_cat), ]
+write.table(a, 'output/atac_select_high_k4me1.bed', row.names=F, col.names=F, sep='\t', quote=F)
+
+
+
+#############
+# 10. More enhancer annotations for downstream analyses
+#############
+
+## Refine categories for enhancer-difference analyses -- require 2-fold K4me1,
+## 2-fold K4me2 for PLE, prom, ELP; and < 1.25-fold K4me2 for typical enhancers
+##
+## Active vs Poised based on 1.5-fold enrichment of K27ac (k27ac has weaker overall
+## signal than k4me1)
+
+data4c <- subset(data4a, dome_k4me1_lg_enrich >= 1 & ((unified_cat == 'enh.like.dist' & dome_k4me2_lg_enrich < log2(1.25)) | (unified_cat != 'enh.like.dist' & dome_k4me2_lg_enrich >= 1)))
+
+### There are some canonical enh with enriched k4me2, but mostly low levels.
+### Rescue the ones with highest levels (25th percentile of PLE and 3-fold enrich) (N = 368)
+
+k4me2_thresh_level <- quantile(data4c[data4c$unified_cat == 'prom.like.dist', 'dome_k4me2_centerdown'], 0.25)
+
+x <- subset(data4a, unified_cat == 'enh.like.dist' & dome_k4me1_lg_enrich >= 1 & dome_k4me2_lg_enrich >= 1 & dome_k4me2_centerdown > k4me2_thresh_level)
+x$unified_cat <- 'prom.like.dist'
+data4c <- rbind(x, data4c)
+
+k27_status <- with(data4c, ifelse(dome_k27ac_lg_enrich >= log2(1.5), 'active', 'poised'))
+data4c$unified_cat <- paste0(k27_status, ".", data4c$unified_cat)
+
+table(data4c$unified_cat)
+#
+# active.enh.like.dist  active.enh.like.prom active.prom.like.dist 
+#                 3293                   745                   735 
+#active.prom.like.prom  poised.enh.like.dist  poised.enh.like.prom 
+#                 4925                  2576                   506 
+#poised.prom.like.dist poised.prom.like.prom 
+#                  368                  1567 
+
+
+a <- data4c[,c('chr', 'start', 'end', 'name', 'unified_cat', 'inferred_strand')]
+a <- a[order(a$unified_cat), ]
+write.table(a, 'output/atac_select_k4me2_refined.bed', row.names=F, col.names=F, sep='\t', quote=F)
+
+
+## Exhaustive annotation of enhancer categories that includes enhancers
+## not considered in the enhancer-difference analysis
+##
+## A subset of these (All active, k4me1/2+ and k27ac+) will be used for
+## a final analysis of k4me2 vs dna meth/h2az, and also to curate
+## likely enhancers that regulate NPS-independent genes
+##
+## Enhancers are classified as active or poised based on 1.5-fold enrichment of K27ac
+##    (k27ac has weaker overall signal than k4me1)
+##
+## K4me2 levels are annotated as high (3-fold), moderate (2-fold), low (1.25-fold) or
+## none (K4me1_only)
+##
+
+data5 <- subset(data4, category == 'dist')
+data5$enh_status <- with(data5,
+			ifelse(dome_k4me1_lg_enrich < 1 & dome_k4me2_lg_enrich < 1, 'lowk4me',
+			ifelse(dome_k27ac_lg_enrich >= log2(1.5), 'active', 'poised')))
+data5$enh_status <- factor(data5$enh_status, levels = c('active', 'poised', 'lowk4me'))
+
+data5$enh_cat <- with(data5, ifelse(enh_status == 'lowk4me', 'NA',
+					ifelse(dome_k4me2_lg_enrich >= log2(3), 'k4me2_hi',
+					ifelse(dome_k4me2_lg_enrich >= 1, 'k4me2_mid',
+					ifelse(dome_k4me2_lg_enrich >= log2(1.25), 'k4me2_low',
+						'k4me1_only')))))
+data5$enh_cat <- factor(data5$enh_cat, levels = c('k4me2_hi', 'k4me2_mid', 'k4me2_low', 'k4me1_only', 'NA'))
+
+
+table(data5[,c('enh_status', 'enh_cat')])
+#           enh_cat
+# enh_status k4me2_hi k4me2_mid k4me2_low k4me1_only    NA
+#    active       967      1184      1364       3320     0
+#    poised       456      1066       832       2609     0
+#    lowk4me        0         0         0          0 14365
+
+
+data5 <- data5[order(data5$enh_cat, -data5$dome_k4me2_lg_enrich), ]
+
+## Write out the full table
+write.table(data5, 'output/all_distal_enh.txt', row.names=F, quote=F, sep='\t')
+
+## Write out a BED of only the active enh
+a <- subset(data5, enh_status == 'active', select = c('chr', 'start', 'end', 'name', 'enh_cat', 'inferred_strand'))
+write.table(a, 'output/active_enh.bed', row.names=F, col.names=F, sep='\t', quote=F)
+
+
+## Curate a set of inactive distal elements as a background for motif finding
+## less than 1.25 enrich for any mark (N = 2662)
+## These should subsequently be filtered to be non exonic
+
+inactive <- data5[apply(data5[,grepl('lg_enrich', names(data5))], 1, max) < log2(1.25), ]
+write.table(inactive[,c('chr', 'start', 'end', 'name', 'enh_cat','inferred_strand')], 'output/inactive_dist.bed', row.names=F, col.names=F, sep='\t', quote=F)
+
+
+## Annotate proximal enhancers similarly to enhancers
+
+data6 <- subset(data4, category == 'prox')
+
+data6$status <- with(data6,
+			ifelse(dome_k4me1_lg_enrich < 1 & dome_k4me2_lg_enrich < 1 & dome_k4me3_lg_enrich < 1, 'lowk4me',
+			ifelse(dome_k27ac_lg_enrich >= log2(1.5), 'active', 'poised')))
+data6$status <- factor(data6$status, levels = c('active', 'poised', 'lowk4me'))
+
+data6$cat <- with(data6, ifelse(status == 'lowk4me', 'NA',
+					ifelse(dome_k4me3_lg_enrich >= log2(1.25), 'k4me3',
+					ifelse(dome_k4me2_lg_enrich >= log2(3), 'k4me2_hi',
+					ifelse(dome_k4me2_lg_enrich >= 1, 'k4me2_mid',
+					ifelse(dome_k4me2_lg_enrich >= log2(1.25), 'k4me2_low',
+						'k4me1_only'))))))
+
+data6$cat <- factor(data6$cat, levels = c('k4me3', 'k4me2_hi', 'k4me2_mid', 'k4me2_low', 'k4me1_only', 'NA'))
+
+table(data6[,c('status', 'cat')])
+#          cat
+# status    k4me3 k4me2_hi k4me2_mid k4me2_low k4me1_only   NA
+#   active   3428      776       304       295        441    0
+#   poised    920      773       553       542        907    0
+#   lowk4me     0        0         0         0          0 2937
+
+data6 <- data6[order(data6$cat, -data6$dome_k4me2_lg_enrich), ]
+
+## Write out the full table
+write.table(data6, 'output/all_prox_elem.txt', row.names=F, quote=F, sep='\t')
+
+## Write out a BED of only the active prox
+a <- subset(data6, status == 'active', select = c('chr', 'start', 'end', 'name', 'cat', 'inferred_strand'))
+write.table(a, 'output/active_prox_elem.bed', row.names=F, col.names=F, sep='\t', quote=F)
+
+
+## Output promoters with no additional annotations, compress annotations
+
+data7 <- subset(data4, grepl('prom_', category))
+data7$category <- with(data7, ifelse(category == 'prom_cage', 'prom_ens',
+					ifelse(category == 'prom_refpred', 'prom_refseq', category)))
+write.table(data7, 'output/all_prom_elem.txt', row.names=F, quote=F, sep='\t')
+
+
+
+
+#############
+# 11. Summary data tables for paper supplement
+#############
+
+# Write out summary tables for figures 1d (also S1d, f), 1e, S1e, S1a, S1b
+
+fig_1d <- data_pca_rot_sub[,c('name', 'PC1', 'PC2', 'PC3', 'PC4', 'PC5', 'PC6', 'category')]
+fig_1d$category <- with(fig_1d, ifelse(category=='dist', 'enh', category))
+fig_1d <- fig_1d[order(fig_1d$category), ]
+fig_1d[,2:(ncol(fig_1d)-1)] <- round(fig_1d[,2:(ncol(fig_1d)-1)], 3)
+write.table(fig_1d, 'output/fig_1d_pooled_pca.txt', row.names=F, col.names=T, sep='\t', quote=F)
+
+
+fig_1e <- data_pca_rot1[,c('name', 'category', 'svm_prediction', 'PC1', 'PC2')]
+fig_1e <- subset(fig_1e, category %in% c('dist', 'prom_cage'))
+fig_1e$group <- with(fig_1e,
+		ifelse(category=='dist' & svm_prediction=='enh', 'k4me1_enh',
+		ifelse(category=='dist' & svm_prediction=='prom', 'k4me2_enh',
+		ifelse(category=='prom_cage' & svm_prediction=='enh', 'lowk4_prom',
+		ifelse(category=='prom_cage' & svm_prediction=='prom', 'highk4_prom', NA)))))
+fig_1e <- fig_1e[,c('name', 'PC1', 'PC2', 'group')]
+fig_1e <- fig_1e[order(fig_1e$group), ]
+fig_1e$PC1 <- round(fig_1e$PC1, 3)
+fig_1e$PC2 <- round(fig_1e$PC2, 3)
+write.table(fig_1e, 'output/fig_1e_pooled_pca_separated.txt', row.names=F, col.names=T, sep='\t', quote=F)
+
+
+fig_s1e <- round(pca$rot, 3)
+write.table(fig_s1e, 'output/fig_s1e_pooled_pca_loadings.txt', row.names=T, col.names=T, sep='\t', quote=F)
+
+
+fig_s1a <- UNPOOLED_data_pca_rot_sub[,c('name', 'category', 'PC1', 'PC2', 'PC3')]
+fig_s1a[,3:5] <- round(fig_s1a[,3:5], 3)
+fig_s1a <- fig_s1a[order(fig_s1a$category), ]
+fig_s1a$category <- ifelse(fig_s1a$category == 'dist', 'enh', fig_s1a$category)
+write.table(fig_s1a, 'output/fig_s1ab_unpooled_pca.txt', row.names=F, col.names=T, sep='\t', quote=F)
+
+fig_s1c <- round(UNPOOLED_pca$rot, 3)
+write.table(fig_s1c, 'output/fig_s1c_unpooled_pca_loadings.txt', row.names=T, col.names=T, sep='\t', quote=F)
+
+
+# Write out summary table for figure 1g
+
+fig_1g <- data4b[,c('name', 'unified_cat', 'dome_k4me1_centerdown', 'dome_k4me2_centerdown', 'dome_k4me3_centerdown', 'dome_k9ac_centerdown', 'dome_k27ac_centerdown', 'dome_h4k16ac_centerdown', 'dome_ntac_centerdown', 'dome_k56ac_centerdown', 'dome_k64ac_centerdown', 'dome_k122ac_centerdown', 'dome_igg_centerdown')]
+
+fig_1g$unified_cat <- with(fig_1g,
+	ifelse(unified_cat == 'enh.like.dist', 'k4me1_enh', 
+	ifelse(unified_cat == 'prom.like.dist', 'k4me2_enh', 
+	ifelse(unified_cat == 'prom.like.prom', 'highk4_prom', 
+	ifelse(unified_cat == 'enh.like.prom', 'lowk4_prom', NA)))))
+fig_1g$unified_cat <- factor(fig_1g$unified_cat, levels=c('k4me1_enh', 'k4me2_enh', 'highk4_prom', 'lowk4_prom'))
+
+names(fig_1g) <- c('name', 'group', 'k4me1', 'k4me2', 'k4me3', 'k9ac', 'k27ac', 'h4k16ac', 'ntac', 'k56ac', 'k64ac', 'k122ac', 'igg')
+
+fig_1g <- fig_1g[order(fig_1g$group), ]
+fig_1g[,3:ncol(fig_1g)] <- round(fig_1g[,3:ncol(fig_1g)], 3)
+
+write.table(fig_1g, 'output/fig_1g_mark_boxplots.txt', row.names=F, col.names=T, sep='\t', quote=F)
+
+
+
+
+
+
+
+
+
+
+
+
+
